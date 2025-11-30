@@ -22,6 +22,7 @@ const mastersRoutes = require("./routes/masters");
 const kanbanMasterRouter = require("./routes/kanbanMaster");
 const localSchedulePartsRoutes = require("./routes/localScheduleParts");
 const vendorsRoutes = require("./routes/vendors");
+const warningSettingsRoutes = require('./routes/warningSettings');
 
 
 // ====== App setup ======
@@ -66,6 +67,8 @@ app.use("/api/masters", mastersRoutes);
 app.use("/api/kanban-master", kanbanMasterRouter);      
 app.use("/api/local-schedules", localSchedulePartsRoutes);
 app.use("/api/vendors", vendorsRoutes);
+app.use('/api/warning-settings', warningSettingsRoutes);
+
             
 
 // ====== 404 fallback ======

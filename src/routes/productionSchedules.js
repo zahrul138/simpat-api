@@ -539,6 +539,7 @@ router.get("/:id", async (req, res) => {
         d.po_number,
         d.pallet_status,
         d.sequence_number,
+        d.status,
         c.cust_name,
         d.material_code,
         COALESCE(d.model, 'Veronicas') AS model,
@@ -563,6 +564,7 @@ router.get("/:id", async (req, res) => {
       pallet_use: 1,
       pallet_status: r.pallet_status || "Pending",
       sequence_number: r.sequence_number || 1,
+      status: r.status || "New"
     }));
 
     return res.json({
@@ -797,6 +799,130 @@ router.delete("/details/:id", async (req, res) => {
       message: "Gagal menghapus detail",
       error: err.message,
     });
+  } finally {
+    client.release();
+  }
+});
+
+router.patch("/auto-complete", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const now = new Date();
+    const currentTime = now.toTimeString().slice(0, 5); // HH:MM
+    const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+
+    console.log(`[AUTO-COMPLETE] Checking schedules for ${currentDate} at ${currentTime}`);
+
+    // Query yang lebih akurat - cek berdasarkan target_date dan shift end time
+    const schedulesToComplete = await client.query(
+      `SELECT ps.id, ps.shift_time, ps.target_date
+       FROM public.production_schedules ps
+       WHERE ps.status = 'OnProgress'
+         AND ps.is_active = true
+         AND (
+           ps.target_date < $1::date 
+           OR 
+           (ps.target_date = $1::date AND SPLIT_PART(ps.shift_time, ' - ', 2) <= $2)
+         )
+       ORDER BY ps.target_date, ps.shift_time`,
+      [currentDate, currentTime]
+    );
+
+    console.log(`[AUTO-COMPLETE] Found ${schedulesToComplete.rowCount} schedules to complete`);
+
+    if (schedulesToComplete.rowCount === 0) {
+      return res.json({
+        message: "No schedules to complete at this time",
+        completed: 0
+      });
+    }
+
+    await client.query("BEGIN");
+
+    const completedSchedules = [];
+
+    for (const schedule of schedulesToComplete.rows) {
+      const scheduleId = schedule.id;
+      
+      // Update status header
+      await client.query(
+        `UPDATE public.production_schedules 
+         SET status = 'Complete', updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $1`,
+        [scheduleId]
+      );
+
+      // Update status semua details
+      await client.query(
+        `UPDATE public.schedule_details 
+         SET status = 'Complete', updated_at = CURRENT_TIMESTAMP 
+         WHERE schedule_id = $1`,
+        [scheduleId]
+      );
+
+      completedSchedules.push({
+        id: scheduleId,
+        shift_time: schedule.shift_time,
+        target_date: schedule.target_date
+      });
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      message: `Successfully completed ${completedSchedules.length} schedules`,
+      completed: completedSchedules.length,
+      schedules: completedSchedules
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ERR PATCH /api/production-schedules/auto-complete", err);
+    return res.status(500).json({ 
+      message: "Server error during auto-complete",
+      error: err.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ===== UPDATE status individual detail =====
+router.patch("/details/:id/status", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id || 0);
+    const { status } = req.body || {};
+
+    if (!id) {
+      return res.status(400).json({ message: "Invalid detail id." });
+    }
+
+    if (!["New", "OnProgress", "Complete", "Reject"].includes(status)) {
+      return res.status(400).json({
+        message: "Status harus salah satu dari: New, OnProgress, Complete, Reject",
+      });
+    }
+
+    const result = await client.query(
+      `UPDATE public.production_schedule_details 
+       SET status = $1, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $2
+       RETURNING id, status`,
+      [status, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "Detail tidak ditemukan." });
+    }
+
+    return res.json({
+      message: "Detail status berhasil diupdate",
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error("ERR PATCH /api/production-schedules/details/:id/status", err);
+    return res.status(500).json({ message: "Server error." });
   } finally {
     client.release();
   }
