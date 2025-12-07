@@ -1,7 +1,9 @@
 // routes/productionSchedules.js
 const express = require("express");
 const router = express.Router();
-const pool = require("../db"); // pg Pool
+const pool = require("../db");
+
+
 
 // ===== Helper =====
 const toStartOfDay = (val) => {
@@ -90,7 +92,6 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "Details tidak boleh kosong." });
     }
 
-    // 2) Validasi tanggal (Request Date = hari ini)
     const today = toStartOfDay(new Date());
     const td = toStartOfDay(targetDate);
     if (!td) {
@@ -100,15 +101,14 @@ router.post("/", async (req, res) => {
       });
     }
 
-    if (td <= today) {
-      return res.status(400).json({
-        message: "Target Date harus lebih besar dari Request Date (hari ini).",
-        targetDate: targetDate,
-        today: today.toISOString().split("T")[0],
-      });
-    }
+    // if (td <= today) {
+    //   return res.status(400).json({
+    //     message: "Target Date harus lebih besar dari Request Date (hari ini).",
+    //     targetDate: targetDate,
+    //     today: today.toISOString().split("T")[0],
+    //   });
+    // }
 
-    // 3) Cek duplikat schedule (line + shift + target_date) yang masih aktif
     const dupCheck = await client.query(
       `SELECT id, prod_schedule_code
        FROM public.production_schedules
@@ -368,13 +368,13 @@ router.get("/", async (req, res) => {
   const client = await pool.connect();
   try {
     const {
-      status, // New | OnProgress | Complete | Reject
-      dateFrom, // YYYY-MM-DD (target_date >=)
-      dateTo, // YYYY-MM-DD (target_date <=)
-      q, // keyword (cust_name / material_code / po_number)
+      status,
+      dateFrom,
+      dateTo,
+      q,
       page = "1",
       limit = "20",
-      includeInactive, // "1" untuk ikutkan is_active=false
+      includeInactive,
     } = req.query || {};
 
     const pg = Math.max(parseInt(page, 10) || 1, 1);
@@ -463,16 +463,50 @@ router.get("/", async (req, res) => {
     `;
     const dataRes = await client.query(dataSql, params);
 
-    return res.json({
-      page: pg,
-      limit: lim,
-      total: totalRows,
-      items: dataRes.rows.map((r) => ({
+    // Fungsi untuk memformat tanggal ke YYYY-MM-DD
+    const formatToYYYYMMDD = (dateString) => {
+      if (!dateString) return null;
+      
+      try {
+        let dateObj;
+        
+        // Jika tanggal sudah mengandung T (ISO format)
+        if (dateString.includes('T')) {
+          dateObj = new Date(dateString);
+        } else {
+          // Jika hanya YYYY-MM-DD
+          dateObj = new Date(dateString + 'T00:00:00');
+        }
+        
+        // Validasi tanggal
+        if (isNaN(dateObj.getTime())) {
+          console.warn('Invalid date string:', dateString);
+          return dateString;
+        }
+        
+        // Format ke YYYY-MM-DD
+        const year = dateObj.getFullYear();
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        
+        return `${year}-${month}-${day}`;
+      } catch (error) {
+        console.error('Error formatting date:', error.message);
+        return dateString;
+      }
+    };
+
+    // Map hasil query dan tambahkan target_date_display
+    const items = dataRes.rows.map((r) => {
+      const formattedDate = formatToYYYYMMDD(r.target_date);
+      
+      return {
         id: r.id,
         code: r.prod_schedule_code,
         line_code: r.line_code,
         shift_time: r.shift_time,
         target_date: r.target_date,
+        target_date_display: formattedDate, // TAMBAHKAN INI
         status: r.status,
         total_input: Number(r.total_input || 0),
         total_customer: Number(r.total_customer || 0),
@@ -483,7 +517,14 @@ router.get("/", async (req, res) => {
           r.created_by_name ||
           `${r.created_by} | ${new Date(r.created_at).toLocaleString("id-ID")}`,
         created_at: r.created_at,
-      })),
+      };
+    });
+
+    return res.json({
+      page: pg,
+      limit: lim,
+      total: totalRows,
+      items: items,
     });
   } catch (err) {
     console.error("ERR GET /api/production-schedules", err.message);
@@ -564,8 +605,40 @@ router.get("/:id", async (req, res) => {
       pallet_use: 1,
       pallet_status: r.pallet_status || "Pending",
       sequence_number: r.sequence_number || 1,
-      status: r.status || "New"
+      status: r.status || "New",
     }));
+
+    // Fungsi untuk memformat tanggal ke YYYY-MM-DD
+    const formatToYYYYMMDD = (dateString) => {
+      if (!dateString) return null;
+      
+      try {
+        let dateObj;
+        
+        if (dateString.includes('T')) {
+          dateObj = new Date(dateString);
+        } else {
+          dateObj = new Date(dateString + 'T00:00:00');
+        }
+        
+        if (isNaN(dateObj.getTime())) {
+          console.warn('Invalid date string:', dateString);
+          return dateString;
+        }
+        
+        const year = dateObj.getFullYear();
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        
+        return `${year}-${month}-${day}`;
+      } catch (error) {
+        console.error('Error formatting date:', error.message);
+        return dateString;
+      }
+    };
+
+    // Format tanggal untuk header
+    const formattedDate = formatToYYYYMMDD(header.target_date);
 
     return res.json({
       header: {
@@ -574,6 +647,7 @@ router.get("/:id", async (req, res) => {
         line_code: header.line_code,
         shift_time: header.shift_time,
         target_date: header.target_date,
+        target_date_display: formattedDate, // TAMBAHKAN INI
         status: header.status,
         total_input: Number(header.total_input || 0),
         total_customer: Number(header.total_customer || 0),
@@ -804,90 +878,95 @@ router.delete("/details/:id", async (req, res) => {
   }
 });
 
-router.patch("/auto-complete", async (req, res) => {
+router.patch("/auto-progress", async (req, res) => {
   const client = await pool.connect();
   try {
     const now = new Date();
     const currentTime = now.toTimeString().slice(0, 5); // HH:MM
-    const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+    const currentDate = now.toISOString().split("T")[0];
 
-    console.log(`[AUTO-COMPLETE] Checking schedules for ${currentDate} at ${currentTime}`);
+    console.log(
+      `[AUTO-PROGRESS] Checking at ${currentTime} on ${currentDate}`
+    );
 
-    // Query yang lebih akurat - cek berdasarkan target_date dan shift end time
-    const schedulesToComplete = await client.query(
-      `SELECT ps.id, ps.shift_time, ps.target_date
+    const schedulesToProgress = await client.query(
+      `SELECT 
+        ps.id, 
+        ps.shift_time,
+        ps.target_date,
+        SPLIT_PART(ps.shift_time, ' - ', 1) as start_time
        FROM public.production_schedules ps
-       WHERE ps.status = 'OnProgress'
+       WHERE ps.status = 'New'
          AND ps.is_active = true
-         AND (
-           ps.target_date < $1::date 
-           OR 
-           (ps.target_date = $1::date AND SPLIT_PART(ps.shift_time, ' - ', 2) <= $2)
-         )
-       ORDER BY ps.target_date, ps.shift_time`,
+         AND ps.target_date = $1::date
+         AND $2 >= SPLIT_PART(ps.shift_time, ' - ', 1)  -- current time >= start time
+       ORDER BY ps.shift_time`,
       [currentDate, currentTime]
     );
 
-    console.log(`[AUTO-COMPLETE] Found ${schedulesToComplete.rowCount} schedules to complete`);
+    console.log(
+      `[AUTO-PROGRESS] Found ${schedulesToProgress.rowCount} schedules to progress`
+    );
 
-    if (schedulesToComplete.rowCount === 0) {
+    if (schedulesToProgress.rowCount === 0) {
       return res.json({
-        message: "No schedules to complete at this time",
-        completed: 0
+        message: "No schedules to progress at this time",
+        progressed: 0,
       });
     }
 
     await client.query("BEGIN");
 
-    const completedSchedules = [];
+    const progressedSchedules = [];
 
-    for (const schedule of schedulesToComplete.rows) {
+    for (const schedule of schedulesToProgress.rows) {
       const scheduleId = schedule.id;
-      
-      // Update status header
+
       await client.query(
         `UPDATE public.production_schedules 
-         SET status = 'Complete', updated_at = CURRENT_TIMESTAMP 
+         SET status = 'OnProgress', 
+             updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1`,
         [scheduleId]
       );
 
-      // Update status semua details
       await client.query(
-        `UPDATE public.schedule_details 
-         SET status = 'Complete', updated_at = CURRENT_TIMESTAMP 
-         WHERE schedule_id = $1`,
+        `UPDATE public.production_schedule_details 
+         SET status = 'OnProgress', 
+             updated_at = CURRENT_TIMESTAMP 
+         WHERE production_schedule_id = $1`,
         [scheduleId]
       );
 
-      completedSchedules.push({
+      progressedSchedules.push({
         id: scheduleId,
         shift_time: schedule.shift_time,
-        target_date: schedule.target_date
+        target_date: schedule.target_date,
+        start_time: schedule.start_time,
       });
+
+      console.log(`[AUTO-PROGRESS] Progressed schedule ID: ${scheduleId}`);
     }
 
     await client.query("COMMIT");
 
     return res.json({
-      message: `Successfully completed ${completedSchedules.length} schedules`,
-      completed: completedSchedules.length,
-      schedules: completedSchedules
+      message: `Successfully progressed ${progressedSchedules.length} schedules`,
+      progressed: progressedSchedules.length,
+      schedules: progressedSchedules,
     });
-
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("ERR PATCH /api/production-schedules/auto-complete", err);
-    return res.status(500).json({ 
-      message: "Server error during auto-complete",
-      error: err.message 
+    console.error("ERR PATCH /api/production-schedules/auto-progress", err);
+    return res.status(500).json({
+      message: "Server error during auto-progress",
+      error: err.message,
     });
   } finally {
     client.release();
   }
 });
 
-// ===== UPDATE status individual detail =====
 router.patch("/details/:id/status", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -900,7 +979,8 @@ router.patch("/details/:id/status", async (req, res) => {
 
     if (!["New", "OnProgress", "Complete", "Reject"].includes(status)) {
       return res.status(400).json({
-        message: "Status harus salah satu dari: New, OnProgress, Complete, Reject",
+        message:
+          "Status harus salah satu dari: New, OnProgress, Complete, Reject",
       });
     }
 
@@ -921,8 +1001,198 @@ router.patch("/details/:id/status", async (req, res) => {
       data: result.rows[0],
     });
   } catch (err) {
-    console.error("ERR PATCH /api/production-schedules/details/:id/status", err);
+    console.error(
+      "ERR PATCH /api/production-schedules/details/:id/status",
+      err
+    );
     return res.status(500).json({ message: "Server error." });
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/:id/check-status", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id || 0);
+    if (!id) return res.status(400).json({ message: "Invalid id." });
+
+    const scheduleRes = await client.query(
+      `SELECT 
+        id, 
+        shift_time, 
+        target_date,
+        status,
+        SPLIT_PART(shift_time, ' - ', 1) as start_time,
+        SPLIT_PART(shift_time, ' - ', 2) as end_time
+       FROM public.production_schedules 
+       WHERE id = $1 AND is_active = true`,
+      [id]
+    );
+
+    if (scheduleRes.rowCount === 0) {
+      return res.status(404).json({ message: "Schedule tidak ditemukan." });
+    }
+
+    const schedule = scheduleRes.rows[0];
+    const now = new Date();
+    const currentTime = now.toTimeString().slice(0, 5);
+
+    const [startHours, startMinutes] = schedule.start_time
+      .split(":")
+      .map(Number);
+    const [endHours, endMinutes] = schedule.end_time.split(":").map(Number);
+    const [currentHours, currentMinutes] = currentTime.split(":").map(Number);
+
+    const startTotalMinutes = startHours * 60 + startMinutes;
+    const endTotalMinutes = endHours * 60 + endMinutes;
+    const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+    let shouldBeCompleted = false;
+    let reason = "";
+
+    if (endTotalMinutes > startTotalMinutes) {
+      shouldBeCompleted = currentTotalMinutes >= endTotalMinutes;
+      reason = shouldBeCompleted
+        ? "Shift sudah selesai"
+        : "Shift masih berjalan";
+    } else {
+      shouldBeCompleted =
+        currentTotalMinutes >= endTotalMinutes &&
+        currentTotalMinutes < startTotalMinutes;
+      reason = shouldBeCompleted
+        ? "Shift sudah selesai (melewati midnight)"
+        : "Shift masih berjalan";
+    }
+
+    return res.json({
+      id: schedule.id,
+      shift_time: schedule.shift_time,
+      status: schedule.status,
+      current_time: currentTime,
+      should_be_completed: shouldBeCompleted,
+      reason: reason,
+      time_data: {
+        start_total_minutes: startTotalMinutes,
+        end_total_minutes: endTotalMinutes,
+        current_total_minutes: currentTotalMinutes,
+      },
+    });
+  } catch (err) {
+    console.error(
+      "ERR GET /api/production-schedules/:id/check-status",
+      err.message
+    );
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    client.release();
+  }
+});
+
+router.patch("/auto-complete", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const now = new Date();
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+    const currentSeconds = now.getSeconds();
+    
+    // Format waktu saat ini: HH:MM
+    const currentTime = `${currentHours.toString().padStart(2, '0')}:${currentMinutes.toString().padStart(2, '0')}`;
+    
+    // Format tanggal hari ini: YYYY-MM-DD
+    const currentDate = now.toISOString().split('T')[0];
+
+    console.log(
+      `[AUTO-COMPLETE] Checking at ${currentTime}:${currentSeconds} on ${currentDate}`
+    );
+
+    // Ambil schedule OnProgress untuk hari ini
+    const schedulesToCheck = await client.query(
+      `SELECT 
+        ps.id, 
+        ps.shift_time,
+        ps.target_date,
+        ps.status,
+        SPLIT_PART(ps.shift_time, ' - ', 1) as start_time,
+        SPLIT_PART(ps.shift_time, ' - ', 2) as end_time
+       FROM public.production_schedules ps
+       WHERE ps.status = 'OnProgress'
+         AND ps.is_active = true
+         AND ps.target_date = $1::date
+       ORDER BY ps.shift_time`,
+      [currentDate]
+    );
+
+    console.log(
+      `[AUTO-COMPLETE] Found ${schedulesToCheck.rowCount} OnProgress schedules for today`
+    );
+
+    if (schedulesToCheck.rowCount === 0) {
+      return res.json({
+        message: "No OnProgress schedules found",
+        completed: 0,
+      });
+    }
+
+    await client.query("BEGIN");
+
+    const completedSchedules = [];
+
+    for (const schedule of schedulesToCheck.rows) {
+      const scheduleId = schedule.id;
+      const endTime = schedule.end_time;
+
+      const endTimeWithSeconds = endTime + ":00";
+      
+      // SANGAT SEDERHANA: Cek apakah currentTime >= endTime
+      if (currentTime >= endTime) {
+        console.log(`[AUTO-COMPLETE] Schedule ${scheduleId}: ${currentTime} >= ${endTime}, completing...`);
+        
+        await client.query(
+          `UPDATE public.production_schedules 
+           SET status = 'Complete', 
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $1`,
+          [scheduleId]
+        );
+
+        await client.query(
+          `UPDATE public.production_schedule_details 
+           SET status = 'Complete', 
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE production_schedule_id = $1`,
+          [scheduleId]
+        );
+
+        completedSchedules.push({
+          id: scheduleId,
+          shift_time: schedule.shift_time,
+          target_date: schedule.target_date,
+          completed_at: now.toISOString(),
+          reason: `Shift ended at ${endTime}, current time is ${currentTime}`
+        });
+      } else {
+        console.log(`[AUTO-COMPLETE] Schedule ${scheduleId}: ${currentTime} < ${endTime}, still in progress`);
+      }
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      message: `Auto-complete checked ${schedulesToCheck.rowCount} schedules, completed ${completedSchedules.length}`,
+      completed: completedSchedules.length,
+      schedules: completedSchedules,
+      current_time: currentTime,
+      current_date: currentDate
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ERR PATCH /api/production-schedules/auto-complete", err);
+    return res.status(500).json({
+      message: "Server error during auto-complete",
+      error: err.message,
+    });
   } finally {
     client.release();
   }

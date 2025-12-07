@@ -23,6 +23,7 @@ const kanbanMasterRouter = require("./routes/kanbanMaster");
 const localSchedulePartsRoutes = require("./routes/localScheduleParts");
 const vendorsRoutes = require("./routes/vendors");
 const warningSettingsRoutes = require('./routes/warningSettings');
+const formatScheduleDates = require("./middleware/dateFormatter");
 
 
 // ====== App setup ======
@@ -68,6 +69,8 @@ app.use("/api/kanban-master", kanbanMasterRouter);
 app.use("/api/local-schedules", localSchedulePartsRoutes);
 app.use("/api/vendors", vendorsRoutes);
 app.use('/api/warning-settings', warningSettingsRoutes);
+
+app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
 
             
 
