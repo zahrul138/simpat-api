@@ -23,6 +23,7 @@ const kanbanMasterRouter = require("./routes/kanbanMaster");
 const localSchedulePartsRoutes = require("./routes/localScheduleParts");
 const vendorsRoutes = require("./routes/vendors");
 const warningSettingsRoutes = require('./routes/warningSettings');
+const vendorPlacement = require('./routes/vendorPlacement');
 const formatScheduleDates = require("./middleware/dateFormatter");
 
 
@@ -48,7 +49,6 @@ app.use(
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
-
 // ====== Health check ======
 app.get("/", (req, res) => {
   res.json({ ok: true, name: "SIMPAT API", port: process.env.PORT });
@@ -69,7 +69,7 @@ app.use("/api/kanban-master", kanbanMasterRouter);
 app.use("/api/local-schedules", localSchedulePartsRoutes);
 app.use("/api/vendors", vendorsRoutes);
 app.use('/api/warning-settings', warningSettingsRoutes);
-
+app.use('/api/vendor-placements', vendorPlacement);
 app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
 
             

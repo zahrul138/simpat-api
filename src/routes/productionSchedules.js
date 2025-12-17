@@ -1144,8 +1144,7 @@ router.patch("/auto-complete", async (req, res) => {
       const endTime = schedule.end_time;
 
       const endTimeWithSeconds = endTime + ":00";
-      
-      // SANGAT SEDERHANA: Cek apakah currentTime >= endTime
+
       if (currentTime >= endTime) {
         console.log(`[AUTO-COMPLETE] Schedule ${scheduleId}: ${currentTime} >= ${endTime}, completing...`);
         

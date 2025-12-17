@@ -49,12 +49,11 @@ router.get("/by-part-code", async (req, res) => {
   }
 });
 
-// POST /api/kanban-master - PERBAIKAN
+// POST /api/kanban-master - VERSION WITHOUT COUNTER UPDATES
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
     const {
-      part_id,
       part_code,
       part_name,
       part_size,
@@ -70,16 +69,13 @@ router.post("/", async (req, res) => {
       stock_level_to,
       unit,
       created_by,
-      kanban_id,
-      quantity_per_kanban,
-      max_kanban_quantity,
-      current_quantity,
-      kanban_status,
-      qty_unit,
-      qty_box,
+      placement_id,
+      part_weight,
+      weight_unit,
     } = req.body;
 
-    console.log("Received kanban master data:", req.body);
+    console.log("=== POST /api/kanban-master ===");
+    console.log("Received data:", req.body);
 
     // Validasi required fields
     if (
@@ -92,32 +88,14 @@ router.post("/", async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Missing required fields: part_code, part_name, vendor_id, part_size, model, stock_level_to",
+        message: "Missing required fields",
       });
     }
 
     await client.query("BEGIN");
 
-    // Handle customer_special format
-    let finalCustomerSpecial = null;
-    if (customer_special) {
-      if (Array.isArray(customer_special)) {
-        finalCustomerSpecial = JSON.stringify(customer_special);
-      } else if (typeof customer_special === "string") {
-        try {
-          JSON.parse(customer_special);
-          finalCustomerSpecial = customer_special;
-        } catch {
-          finalCustomerSpecial = JSON.stringify([customer_special]);
-        }
-      }
-    }
-
-    // Prioritaskan size_id dari frontend, baru cari otomatis jika tidak ada
+    // ========== 1. RESOLVE SIZE ID ==========
     let finalSizeId = size_id;
-
-    // Jika size_id tidak dikirim dari frontend, cari otomatis berdasarkan part_size
     if (!finalSizeId && part_size) {
       const sizeQuery = await client.query(
         `SELECT id FROM part_sizes WHERE size_name = $1 AND is_active = true LIMIT 1`,
@@ -128,12 +106,63 @@ router.post("/", async (req, res) => {
       }
     }
 
-    let finalPartId = part_id || generateRandomPartId();
-    const finalKanbanId = kanban_id || `KB-${part_code}`;
+    // ========== 2. VALIDATE PLACEMENT ==========
+    let finalPlacementId = placement_id || null;
+    if (finalPlacementId) {
+      const placementCheck = await client.query(
+        `SELECT id FROM vendor_placement WHERE id = $1 AND is_active = true`,
+        [finalPlacementId]
+      );
+      if (placementCheck.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          success: false,
+          message: "Invalid placement selected",
+        });
+      }
+    }
 
-    const createdById = created_by ? parseInt(created_by) : null;
+    // ========== 3. VALIDATE VENDOR ==========
+    const vendorCheck = await client.query(
+      `SELECT id, vendor_name FROM vendor_detail WHERE id = $1 AND is_active = true`,
+      [vendor_id]
+    );
+    if (vendorCheck.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        message: "Invalid vendor selected",
+      });
+    }
 
-    // Insert ke kanban_master dengan size_id
+    // ========== 4. CHECK FOR DUPLICATE PART CODE ==========
+    const duplicateCheck = await client.query(
+      `SELECT id FROM kanban_master WHERE part_code = $1 AND is_active = true`,
+      [part_code]
+    );
+    if (duplicateCheck.rows.length > 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        message: "Part code already exists",
+      });
+    }
+
+    // ========== 5. GENERATE IDs ==========
+    const finalPartId = generateRandomPartId();
+    const finalKanbanId = `KB-${part_code}`;
+
+    // ========== 6. PREPARE CUSTOMER SPECIAL ==========
+    let finalCustomerSpecial = null;
+    if (customer_special && part_types === "Special") {
+      if (Array.isArray(customer_special)) {
+        finalCustomerSpecial = JSON.stringify(customer_special);
+      } else if (typeof customer_special === "string") {
+        finalCustomerSpecial = JSON.stringify([customer_special]);
+      }
+    }
+
+    // ========== 7. INSERT KANBAN MASTER ==========
     const insertQuery = `
       INSERT INTO kanban_master (
         part_id, part_code, part_name, part_size, part_material, 
@@ -141,8 +170,11 @@ router.post("/", async (req, res) => {
         vendor_id, vendor_type, stock_level_to, unit, created_by,
         kanban_id, quantity_per_kanban, max_kanban_quantity, 
         current_quantity, kanban_status, qty_unit, qty_box, size_id,
+        placement_id, part_weight, weight_unit,
         created_at, updated_at, is_active
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 
+                $16, 1, 100, 0, 'Active', 0, 0, $17, $18, $19, $20, 
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true) 
       RETURNING *
     `;
 
@@ -161,99 +193,31 @@ router.post("/", async (req, res) => {
       vendor_type || null,
       stock_level_to,
       unit || "PCS",
-      createdById,
+      created_by || null,
       finalKanbanId,
-      quantity_per_kanban || 1,
-      max_kanban_quantity || 100,
-      current_quantity || 0,
-      kanban_status || "Active",
-      qty_unit || 0,
-      qty_box || 0,
       finalSizeId,
+      finalPlacementId,
+      part_weight || null,
+      weight_unit || 'kg',
     ];
 
-    console.log("Insert values:", values);
-    console.log("Size ID used:", finalSizeId);
-
     const { rows } = await client.query(insertQuery, values);
+    const newPart = rows[0];
 
-    if (finalSizeId) {
-      try {
-        // Coba update dengan updated_at terlebih dahulu
-        const updateSizeQuery = `
-          UPDATE part_sizes 
-          SET total_parts = COALESCE(total_parts, 0) + 1, 
-              updated_at = CURRENT_TIMESTAMP 
-          WHERE id = $1
-        `;
-        await client.query(updateSizeQuery, [finalSizeId]);
-        console.log(`✅ Updated total_parts for size_id: ${finalSizeId}`);
-      } catch (error) {
-        // Jika gagal karena kolom updated_at tidak ada, gunakan tanpa updated_at
-        if (error.code === "42703") {
-          // undefined_column error
-          console.log(
-            "⚠️  updated_at column not found, using alternative update"
-          );
-          const updateSizeQueryAlt = `
-            UPDATE part_sizes 
-            SET total_parts = COALESCE(total_parts, 0) + 1
-            WHERE id = $1
-          `;
-          await client.query(updateSizeQueryAlt, [finalSizeId]);
-          console.log(
-            `✅ Updated total_parts (without updated_at) for size_id: ${finalSizeId}`
-          );
-        } else {
-          throw error; // Re-throw error lainnya
-        }
-      }
-    }
+    console.log("✅ Kanban master inserted:", newPart.id);
 
-    const updateVendorQuery = `
-      UPDATE vendor_detail 
-      SET total_parts = COALESCE(total_parts, 0) + 1, 
-          updated_at = CURRENT_TIMESTAMP 
-      WHERE id = $1
-    `;
-    await client.query(updateVendorQuery, [vendor_id]);
-    console.log(`✅ Updated total_parts for vendor_id: ${vendor_id}`);
-
-    // Update customer special parts jika part special
-    if (part_types === "Special" && customer_special) {
-      let customerIds = [];
-      if (Array.isArray(customer_special)) {
-        customerIds = customer_special;
-      } else if (typeof customer_special === "string") {
-        try {
-          customerIds = JSON.parse(customer_special);
-        } catch {
-          customerIds = [customer_special];
-        }
-      }
-
-      for (const customerId of customerIds) {
-        const updateCustomerQuery = `
-          UPDATE customers 
-          SET total_special_parts = COALESCE(total_special_parts, 0) + 1, 
-              updated_at = CURRENT_TIMESTAMP 
-          WHERE id = $1
-        `;
-        await client.query(updateCustomerQuery, [customerId]);
-        console.log(
-          `✅ Updated total_special_parts for customer_id: ${customerId}`
-        );
-      }
-    }
+    // ========== 8. HAPUS SEMUA UPDATE COUNTER ==========
+    // TIDAK PERLU UPDATE COUNTER DI SINI
+    // Biarkan sync-counters atau trigger database yang handle
 
     await client.query("COMMIT");
 
-    console.log("✅ Kanban master created successfully:", rows[0]);
+    console.log("✅ Transaction completed without counter updates");
 
     res.status(201).json({
       success: true,
       message: "Part created successfully",
-      part: rows[0],
+      part: newPart,
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -262,7 +226,7 @@ router.post("/", async (req, res) => {
     if (error.code === "23505") {
       return res.status(400).json({
         success: false,
-        message: "Part code already exists in kanban_master",
+        message: "Part code already exists",
       });
     }
 
@@ -276,6 +240,7 @@ router.post("/", async (req, res) => {
   }
 });
 
+
 // GET /api/kanban-master/with-details
 router.get("/with-details", async (req, res) => {
   try {
@@ -287,12 +252,16 @@ router.get("/with-details", async (req, res) => {
         ps.size_name,
         vd.vendor_name,
         vd.vendor_code,
-        e.emp_name as created_by_name
+        e.emp_name as created_by_name,
+        vp.placement_name,
+        vp.length_cm as placement_length,
+        vp.width_cm as placement_width,
+        vp.height_cm as placement_height
       FROM kanban_master km
       LEFT JOIN part_sizes ps ON km.size_id = ps.id
       LEFT JOIN vendor_detail vd ON km.vendor_id = vd.id
       LEFT JOIN employees e ON km.created_by = e.id
-      -- HAPUS FILTER is_active karena data sudah di-hard delete
+      LEFT JOIN vendor_placement vp ON km.placement_id = vp.id 
       WHERE 1=1
     `;
 
@@ -349,23 +318,32 @@ router.get("/with-details", async (req, res) => {
   }
 });
 
-// DELETE /api/kanban-master/:id
+/// DELETE /api/kanban-master/:id - FIXED VERSION WITH DATABASE TRIGGER
 router.delete("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
 
+    console.log(`=== DELETE /api/kanban-master/${id} ===`);
+
     await client.query("BEGIN");
 
-    // 1. Dapatkan data part sebelum dihapus untuk update counter
+    // ========== 1. GET PART DATA ==========
     const partQuery = await client.query(
-      `SELECT part_code, vendor_id, size_id, part_types, customer_special 
+      `SELECT 
+        part_code, 
+        vendor_id, 
+        size_id, 
+        part_types, 
+        customer_special, 
+        placement_id 
        FROM kanban_master 
        WHERE id = $1`,
       [id]
     );
 
     if (partQuery.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
         message: "Part not found",
@@ -373,106 +351,279 @@ router.delete("/:id", async (req, res) => {
     }
 
     const part = partQuery.rows[0];
+    console.log("Part to delete:", part);
 
-    // 2. HARD DELETE - hapus permanen dari database
+    // ========== 2. DELETE PART ==========
     const deleteQuery = `
       DELETE FROM kanban_master 
       WHERE id = $1 
       RETURNING *
     `;
-
     const { rows } = await client.query(deleteQuery, [id]);
+    const deletedPart = rows[0];
 
-    // 3. Update counters (decrement)
-    if (part.vendor_id) {
-      await client.query(
-        `UPDATE vendor_detail 
-         SET total_parts = GREATEST(COALESCE(total_parts, 0) - 1, 0),
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
-        [part.vendor_id]
-      );
-    }
+    console.log("✅ Part deleted:", deletedPart.part_code);
 
-    if (part.size_id) {
-      await client.query(
-        `UPDATE part_sizes 
-         SET total_parts = GREATEST(COALESCE(total_parts, 0) - 1, 0),
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
-        [part.size_id]
-      );
-    }
-
-    // PERBAIKAN: Handle customer_special dengan lebih robust
-    if (part.part_types === "Special" && part.customer_special) {
-      let customerIds = [];
-
-      try {
-        // Coba parse JSON
-        const parsed = JSON.parse(part.customer_special);
-
-        // Handle berbagai kemungkinan format
-        if (Array.isArray(parsed)) {
-          customerIds = parsed;
-        } else if (typeof parsed === "string") {
-          customerIds = [parsed];
-        } else if (typeof parsed === "number") {
-          customerIds = [parsed.toString()];
-        }
-      } catch (error) {
-        // Jika parsing gagal, treat sebagai string biasa
-        console.log(
-          "JSON parse failed, treating as string:",
-          part.customer_special
-        );
-        if (typeof part.customer_special === "string") {
-          customerIds = [part.customer_special];
-        } else if (typeof part.customer_special === "number") {
-          customerIds = [part.customer_special.toString()];
-        }
-      }
-
-      // Pastikan customerIds adalah array yang valid sebelum iterate
-      if (Array.isArray(customerIds) && customerIds.length > 0) {
-        for (const customerId of customerIds) {
-          if (customerId) {
-            // Pastikan customerId tidak null/undefined
-            await client.query(
-              `UPDATE customers 
-               SET total_special_parts = GREATEST(COALESCE(total_special_parts, 0) - 1, 0),
-                   updated_at = CURRENT_TIMESTAMP
-               WHERE id = $1`,
-              [customerId]
-            );
-          }
-        }
-      } else {
-        console.log("No valid customer IDs found for special part deletion");
-      }
-    }
-
+    // ========== 3. HAPUS SEMUA COUNTER UPDATES ==========
+    // SEKARANG DATABASE TRIGGER YANG AKAN HANDLE COUNTER UPDATES
+    // TIDAK PERLU LOGIC MANUAL LAGI
+    
     await client.query("COMMIT");
 
-    console.log(
-      `✅ HARD DELETE successful for part ID: ${id}, Code: ${part.part_code}`
-    );
+    console.log("✅ Part deleted successfully. Counters updated via database triggers.");
 
     res.json({
       success: true,
       message: "Part permanently deleted successfully",
-      data: rows[0],
+      data: deletedPart,
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("❌ HARD DELETE /api/kanban-master/:id Error:", error);
+    console.error("❌ DELETE /api/kanban-master/:id Error:", error);
+    
     res.status(500).json({
       success: false,
-      message: "Failed to delete part permanently",
+      message: "Failed to delete part",
       error: error.message,
     });
   } finally {
     client.release();
   }
 });
+
+// PUT /api/kanban-master/:id - FIXED VERSION
+router.put("/:id", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const {
+      part_code,
+      part_name,
+      part_size,
+      size_id,
+      part_material,
+      part_types,
+      qty_per_box,
+      part_price,
+      customer_special,
+      model,
+      vendor_id,
+      vendor_type,
+      stock_level_to,
+      placement_id,
+      part_weight,
+      weight_unit,
+    } = req.body;
+
+    console.log(`=== PUT /api/kanban-master/${id} ===`);
+    console.log("Update data:", req.body);
+
+    await client.query("BEGIN");
+
+    // ========== 1. GET CURRENT PART DATA ==========
+    const currentPartQuery = await client.query(
+      `SELECT 
+        vendor_id as current_vendor_id,
+        size_id as current_size_id,
+        part_types as current_part_types,
+        customer_special as current_customer_special,
+        placement_id as current_placement_id
+       FROM kanban_master 
+       WHERE id = $1`,
+      [id]
+    );
+
+    if (currentPartQuery.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        message: "Part not found",
+      });
+    }
+
+    const current = currentPartQuery.rows[0];
+    console.log("Current part data:", current);
+
+    // ========== 2. PREPARE UPDATE DATA ==========
+    let finalCustomerSpecial = null;
+    if (customer_special && part_types === "Special") {
+      if (Array.isArray(customer_special)) {
+        finalCustomerSpecial = JSON.stringify(customer_special);
+      } else if (typeof customer_special === "string") {
+        finalCustomerSpecial = JSON.stringify([customer_special]);
+      }
+    }
+
+    const numericQtyPerBox = qty_per_box ? parseInt(qty_per_box) : null;
+    const numericPartPrice = part_price ? parseFloat(part_price) : null;
+    const numericSizeId = size_id ? parseInt(size_id) : null;
+    const numericVendorId = vendor_id ? parseInt(vendor_id) : null;
+    const numericPlacementId = placement_id ? parseInt(placement_id) : null;
+
+    // ========== 3. UPDATE PART ==========
+    const updateQuery = `
+      UPDATE kanban_master SET
+        part_code = COALESCE($1, part_code),
+        part_name = COALESCE($2, part_name),
+        part_size = COALESCE($3, part_size),
+        size_id = COALESCE($4, size_id),
+        part_material = COALESCE($5, part_material),
+        part_types = COALESCE($6, part_types),
+        qty_per_box = COALESCE($7, qty_per_box),
+        part_price = COALESCE($8, part_price),
+        customer_special = COALESCE($9, customer_special),
+        model = COALESCE($10, model),
+        vendor_id = COALESCE($11, vendor_id),
+        vendor_type = COALESCE($12, vendor_type),
+        stock_level_to = COALESCE($13, stock_level_to),
+        placement_id = COALESCE($14, placement_id),
+        part_weight = COALESCE($15, part_weight),
+        weight_unit = COALESCE($16, weight_unit),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $17
+      RETURNING *
+    `;
+
+    const values = [
+      part_code,
+      part_name,
+      part_size,
+      numericSizeId,
+      part_material,
+      part_types,
+      numericQtyPerBox,
+      numericPartPrice,
+      finalCustomerSpecial,
+      model,
+      numericVendorId,
+      vendor_type,
+      stock_level_to,
+      numericPlacementId,
+      part_weight,
+      weight_unit,
+      id,
+    ];
+
+    const { rows } = await client.query(updateQuery, values);
+    const updatedPart = rows[0];
+
+    console.log("✅ Part updated:", updatedPart.part_code);
+
+    // ========== 4. HANDLE COUNTER CHANGES ==========
+    
+   
+
+   
+    
+
+
+
+    await client.query("COMMIT");
+
+    console.log("✅ All counters updated for part update");
+
+    res.json({
+      success: true,
+      message: "Part updated successfully",
+      data: updatedPart,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("❌ PUT /api/kanban-master/:id Error:", error);
+
+    if (error.code === "23505") {
+      return res.status(400).json({
+        success: false,
+        message: "Part code already exists",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to update part",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+
+// // POST /api/kanban-master/sync-counters
+// router.post("/sync-counters", async (req, res) => {
+//   const client = await pool.connect();
+//   try {
+//     console.log("=== SYNCING ALL COUNTERS ===");
+    
+//     await client.query("BEGIN");
+
+//     // Sync vendor_detail
+//     await client.query(`
+//       UPDATE vendor_detail vd
+//       SET total_parts = (
+//         SELECT COUNT(*) 
+//         FROM kanban_master km 
+//         WHERE km.vendor_id = vd.id
+//           AND km.is_active = true
+//       ),
+//       updated_at = CURRENT_TIMESTAMP
+//     `);
+//     console.log("✅ Synced vendor_detail.total_parts");
+
+//     // Sync part_sizes
+//     await client.query(`
+//       UPDATE part_sizes ps
+//       SET total_parts = (
+//         SELECT COUNT(*) 
+//         FROM kanban_master km 
+//         WHERE km.size_id = ps.id
+//           AND km.is_active = true
+//       ),
+//       updated_at = CURRENT_TIMESTAMP
+//     `);
+//     console.log("✅ Synced part_sizes.total_parts");
+
+//     // Sync vendor_placement
+//     await client.query(`
+//       UPDATE vendor_placement vp
+//       SET total_parts = (
+//         SELECT COUNT(*) 
+//         FROM kanban_master km 
+//         WHERE km.placement_id = vp.id
+//           AND km.is_active = true
+//       ),
+//       updated_at = CURRENT_TIMESTAMP
+//     `);
+//     console.log("✅ Synced vendor_placement.total_parts");
+
+//     // Reset nulls to zero
+//     await client.query(`
+//       UPDATE vendor_detail SET total_parts = 0 WHERE total_parts IS NULL;
+//       UPDATE part_sizes SET total_parts = 0 WHERE total_parts IS NULL;
+//       UPDATE vendor_placement SET total_parts = 0 WHERE total_parts IS NULL;
+//     `);
+//     console.log("✅ Reset NULL counters to 0");
+
+//     await client.query("COMMIT");
+
+//     console.log("=== ALL COUNTERS SYNCED SUCCESSFULLY ===");
+
+//     res.json({
+//       success: true,
+//       message: "All counters synced successfully",
+//       timestamp: new Date().toISOString(),
+//     });
+//   } catch (error) {
+//     await client.query("ROLLBACK");
+//     console.error("❌ Error syncing counters:", error);
+//     res.status(500).json({
+//       success: false,
+//       message: "Failed to sync counters",
+//       error: error.message,
+//     });
+//   } finally {
+//     client.release();
+//   }
+// });
+
 module.exports = router;

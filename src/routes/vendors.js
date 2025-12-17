@@ -4,7 +4,6 @@ const router = express.Router();
 const pool = require("../db");
 const authenticateToken = require("../middleware/auth"); 
 
-// GET /api/vendors
 router.get("/", async (req, res) => {
   try {
     console.log("[GET /api/vendors] Fetching vendors...");
@@ -25,7 +24,7 @@ router.get("/", async (req, res) => {
         updated_at,
         total_parts
       FROM vendor_detail
-      ORDER BY created_at DESC
+      ORDER BY id DESC  -- GANTI DARI created_at DESC KE id DESC
     `;
 
     const { rows } = await pool.query(query);
@@ -47,7 +46,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /api/vendors - Create new vendor (TANPA AUTH DULU)
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try { 
@@ -75,13 +73,11 @@ router.post("/", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Generate vendor_code SEDERHANA
     const timestamp = Date.now().toString().slice(-6);
     const vendor_code = `V${timestamp}`;
 
     console.log("Generated vendor_code:", vendor_code);
 
-    // INSERT query
     const insertQuery = `
       INSERT INTO vendor_detail (
         vendor_code, vendor_name, vendor_desc, vendor_type_id, 
@@ -311,6 +307,59 @@ router.put("/:id/increment-parts", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update vendor parts count",
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /api/vendors/reset-counters
+router.post("/reset-counters", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    console.log("[POST /api/vendors/reset-counters] Resetting counters...");
+    
+    await client.query("BEGIN");
+
+    // Reset semua total_parts ke 0
+    await client.query(`
+      UPDATE vendor_detail 
+      SET total_parts = 0,
+          updated_at = CURRENT_TIMESTAMP
+    `);
+
+    // Hitung ulang dari kanban_master
+    await client.query(`
+      UPDATE vendor_detail vd
+      SET total_parts = (
+        SELECT COUNT(*) 
+        FROM kanban_master km 
+        WHERE km.vendor_id = vd.id
+          AND km.is_active = true
+      ),
+      updated_at = CURRENT_TIMESTAMP
+      WHERE EXISTS (
+        SELECT 1 FROM kanban_master km 
+        WHERE km.vendor_id = vd.id
+      )
+    `);
+
+    await client.query("COMMIT");
+
+    console.log("[POST /api/vendors/reset-counters] Counters reset successfully");
+
+    res.json({
+      success: true,
+      message: "Vendor counters reset successfully"
+    });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[POST /api/vendors/reset-counters] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reset counters",
       error: error.message
     });
   } finally {
