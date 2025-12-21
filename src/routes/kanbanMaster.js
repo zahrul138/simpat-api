@@ -156,8 +156,15 @@ router.post("/", async (req, res) => {
     let finalCustomerSpecial = null;
     if (customer_special && part_types === "Special") {
       if (Array.isArray(customer_special)) {
-        finalCustomerSpecial = JSON.stringify(customer_special);
+        // Validasi customer IDs
+        const validCustomerIds = customer_special.filter(
+          (id) => !isNaN(parseInt(id))
+        );
+        if (validCustomerIds.length > 0) {
+          finalCustomerSpecial = JSON.stringify(validCustomerIds);
+        }
       } else if (typeof customer_special === "string") {
+        // Handle single customer (backward compatibility)
         finalCustomerSpecial = JSON.stringify([customer_special]);
       }
     }
