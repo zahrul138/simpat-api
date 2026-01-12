@@ -245,15 +245,24 @@ router.get("/", async (req, res) => {
                 lsp.unit,
                 lsp.do_number,
                 lsp.remark,
-                TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date
+                TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
+                COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates
                FROM local_schedule_parts lsp
                WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
                ORDER BY lsp.id ASC`,
               [vendor.id]
             );
 
+            // Parse prod_dates from JSON
+            const partsWithParsedDates = partsResult.rows.map(part => ({
+              ...part,
+              prod_dates: typeof part.prod_dates === 'string' 
+                ? JSON.parse(part.prod_dates) 
+                : (Array.isArray(part.prod_dates) ? part.prod_dates : [])
+            }));
+
             // Filter parts jika ada filter
-            let filteredParts = partsResult.rows;
+            let filteredParts = partsWithParsedDates;
             if (part_code) {
               filteredParts = filteredParts.filter((part) =>
                 part.part_code?.toLowerCase().includes(part_code.toLowerCase())
@@ -363,16 +372,25 @@ router.get("/received-vendors", async (req, res) => {
             lsp.unit,
             lsp.do_number,
             lsp.remark,
-            TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date
+            TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
+            COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates
            FROM local_schedule_parts lsp
            WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
            ORDER BY lsp.id ASC`,
           [vendor.id]
         );
 
+        // Parse prod_dates from JSON
+        const partsWithParsedDates = partsResult.rows.map(part => ({
+          ...part,
+          prod_dates: typeof part.prod_dates === 'string' 
+            ? JSON.parse(part.prod_dates) 
+            : (Array.isArray(part.prod_dates) ? part.prod_dates : [])
+        }));
+
         return {
           ...vendor,
-          parts: partsResult.rows,
+          parts: partsWithParsedDates,
         };
       })
     );
@@ -445,16 +463,25 @@ router.get("/iqc-progress-vendors", async (req, res) => {
             lsp.do_number,
             lsp.remark,
             lsp.status,
-            TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date
+            TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
+            COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates
            FROM local_schedule_parts lsp
            WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
            ORDER BY lsp.id ASC`,
           [vendor.id]
         );
 
+        // Parse prod_dates from JSON
+        const partsWithParsedDates = partsResult.rows.map(part => ({
+          ...part,
+          prod_dates: typeof part.prod_dates === 'string' 
+            ? JSON.parse(part.prod_dates) 
+            : (Array.isArray(part.prod_dates) ? part.prod_dates : [])
+        }));
+
         return {
           ...vendor,
-          parts: partsResult.rows,
+          parts: partsWithParsedDates,
         };
       })
     );
@@ -527,16 +554,37 @@ router.get("/sample-vendors", async (req, res) => {
             lsp.do_number,
             lsp.remark,
             lsp.status,
-            TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date
+            TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
+            lsp.prod_dates
            FROM local_schedule_parts lsp
            WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
            ORDER BY lsp.id ASC`,
           [vendor.id]
         );
 
+        // Parse prod_dates for each part
+        const partsWithParsedDates = partsResult.rows.map((part) => {
+          let parsedProdDates = [];
+          if (part.prod_dates) {
+            try {
+              if (typeof part.prod_dates === "string") {
+                parsedProdDates = JSON.parse(part.prod_dates);
+              } else if (Array.isArray(part.prod_dates)) {
+                parsedProdDates = part.prod_dates;
+              }
+            } catch (e) {
+              console.error("[GET Sample Vendors] Error parsing prod_dates:", e);
+            }
+          }
+          return {
+            ...part,
+            prod_dates: parsedProdDates,
+          };
+        });
+
         return {
           ...vendor,
-          parts: partsResult.rows,
+          parts: partsWithParsedDates,
         };
       })
     );
@@ -607,16 +655,37 @@ router.get("/complete-vendors", async (req, res) => {
             lsp.do_number,
             lsp.remark,
             lsp.status,
-            TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date
+            TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
+            lsp.prod_dates
            FROM local_schedule_parts lsp
            WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
            ORDER BY lsp.id ASC`,
           [vendor.id]
         );
 
+        // Parse prod_dates for each part
+        const partsWithParsedDates = partsResult.rows.map((part) => {
+          let parsedProdDates = [];
+          if (part.prod_dates) {
+            try {
+              if (typeof part.prod_dates === "string") {
+                parsedProdDates = JSON.parse(part.prod_dates);
+              } else if (Array.isArray(part.prod_dates)) {
+                parsedProdDates = part.prod_dates;
+              }
+            } catch (e) {
+              console.error("[GET Complete Vendors] Error parsing prod_dates:", e);
+            }
+          }
+          return {
+            ...part,
+            prod_dates: parsedProdDates,
+          };
+        });
+
         return {
           ...vendor,
-          parts: partsResult.rows,
+          parts: partsWithParsedDates,
         };
       })
     );
@@ -915,15 +984,12 @@ router.put("/bulk/status", async (req, res) => {
   }
 });
 
-// ====== UPDATE PART (untuk inline editing di Today tab) ======
-router.put("/parts/:partId", async (req, res) => {
-  const client = await pool.connect();
+// PUT /api/local-schedules/parts/:id
+// Update untuk menerima prod_dates (array)
+router.put('/parts/:id', async (req, res) => {
   try {
-    const { partId } = req.params;
-    const { part_code, part_name, quantity, quantity_box, unit, remark, prod_date, status } = req.body;
-
-    console.log(`[UPDATE Part] Request:`, {
-      partId,
+    const { id } = req.params;
+    const {
       part_code,
       part_name,
       quantity,
@@ -931,137 +997,74 @@ router.put("/parts/:partId", async (req, res) => {
       unit,
       remark,
       prod_date,
-      status,
-    });
+      prod_dates,  // NEW: Array of dates
+      status
+    } = req.body;
 
-    await client.query("BEGIN");
-
-    // Cek apakah part exists
-    const partCheck = await client.query(
-      `SELECT id, local_schedule_vendor_id FROM local_schedule_parts 
-       WHERE id = $1 AND is_active = true`,
-      [partId]
-    );
-
-    if (partCheck.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({
-        success: false,
-        message: "Part not found",
-      });
-    }
-
-    const vendorId = partCheck.rows[0].local_schedule_vendor_id;
-
-    // Build update query dynamically based on provided fields
-    let updateFields = [];
-    let params = [];
-    let paramCount = 0;
+    const updateFields = [];
+    const values = [];
+    let paramIndex = 1;
 
     if (part_code !== undefined) {
-      paramCount++;
-      updateFields.push(`part_code = $${paramCount}`);
-      params.push(part_code);
+      updateFields.push(`part_code = $${paramIndex++}`);
+      values.push(part_code);
     }
-
     if (part_name !== undefined) {
-      paramCount++;
-      updateFields.push(`part_name = $${paramCount}`);
-      params.push(part_name);
+      updateFields.push(`part_name = $${paramIndex++}`);
+      values.push(part_name);
     }
-
     if (quantity !== undefined) {
-      paramCount++;
-      updateFields.push(`quantity = $${paramCount}`);
-      params.push(Number(quantity) || 0);
+      updateFields.push(`quantity = $${paramIndex++}`);
+      values.push(quantity);
     }
-
     if (quantity_box !== undefined) {
-      paramCount++;
-      updateFields.push(`quantity_box = $${paramCount}`);
-      params.push(Number(quantity_box) || 0);
+      updateFields.push(`quantity_box = $${paramIndex++}`);
+      values.push(quantity_box);
     }
-
     if (unit !== undefined) {
-      paramCount++;
-      updateFields.push(`unit = $${paramCount}`);
-      params.push(unit);
+      updateFields.push(`unit = $${paramIndex++}`);
+      values.push(unit);
     }
-
     if (remark !== undefined) {
-      if (remark === null || remark === '') {
-        updateFields.push(`remark = NULL`);
-      } else {
-        paramCount++;
-        updateFields.push(`remark = $${paramCount}`);
-        params.push(remark);
-      }
+      updateFields.push(`remark = $${paramIndex++}`);
+      values.push(remark);
     }
-
     if (prod_date !== undefined) {
-      if (prod_date === null || prod_date === '') {
-        updateFields.push(`prod_date = NULL`);
-      } else {
-        paramCount++;
-        updateFields.push(`prod_date = $${paramCount}::date`);
-        params.push(prod_date);
-      }
+      updateFields.push(`prod_date = $${paramIndex++}`);
+      values.push(prod_date);
     }
-
+    // NEW: Handle prod_dates array
+    if (prod_dates !== undefined) {
+      updateFields.push(`prod_dates = $${paramIndex++}`);
+      values.push(JSON.stringify(prod_dates));
+    }
     if (status !== undefined) {
-      if (status === null || status === '') {
-        updateFields.push(`status = NULL`);
-      } else {
-        paramCount++;
-        updateFields.push(`status = $${paramCount}`);
-        params.push(status);
-      }
+      updateFields.push(`status = $${paramIndex++}`);
+      values.push(status);
     }
 
-    // Always update updated_at
-    updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
-
-    if (updateFields.length === 1) {
-      // Only updated_at, no actual updates
-      await client.query("ROLLBACK");
-      return res.status(400).json({
-        success: false,
-        message: "No fields to update",
-      });
+    if (updateFields.length === 0) {
+      return res.status(400).json({ success: false, message: 'No fields to update' });
     }
 
-    // Add partId as the last parameter
-    paramCount++;
-    params.push(partId);
-
-    const updateQuery = `
+    values.push(id);
+    const query = `
       UPDATE local_schedule_parts 
-      SET ${updateFields.join(", ")}
-      WHERE id = $${paramCount} AND is_active = true 
-      RETURNING id, part_code, part_name, quantity, quantity_box, unit, remark, status, TO_CHAR(prod_date, 'YYYY-MM-DD') as prod_date, updated_at
+      SET ${updateFields.join(', ')}, updated_at = NOW()
+      WHERE id = $${paramIndex}
+      RETURNING *
     `;
 
-    const result = await client.query(updateQuery, params);
+    const result = await pool.query(query, values);
 
-    await client.query("COMMIT");
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Part not found' });
+    }
 
-    console.log(`[UPDATE Part] Success:`, result.rows[0]);
-
-    res.json({
-      success: true,
-      message: "Part updated successfully",
-      data: result.rows[0],
-    });
+    res.json({ success: true, data: result.rows[0] });
   } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("[UPDATE Part] Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to update part",
-      error: error.message,
-    });
-  } finally {
-    client.release();
+    console.error('Error updating part:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
