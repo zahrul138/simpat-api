@@ -25,6 +25,7 @@ const vendorsRoutes = require("./routes/vendors");
 const warningSettingsRoutes = require('./routes/warningSettings');
 const vendorPlacement = require('./routes/vendorPlacement');
 const qcChecksRoutes = require('./routes/qcChecks');
+const stockInventoryRoutes = require('./routes/stockInventory');
 const formatScheduleDates = require("./middleware/dateFormatter");
 
 
@@ -72,6 +73,7 @@ app.use("/api/vendors", vendorsRoutes);
 app.use('/api/warning-settings', warningSettingsRoutes);
 app.use('/api/vendor-placements', vendorPlacement);
 app.use('/api/qc-checks', qcChecksRoutes);
+app.use('/api/stock-inventory', stockInventoryRoutes);
 app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
 
             

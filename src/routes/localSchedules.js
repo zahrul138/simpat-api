@@ -1253,12 +1253,22 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek apakah vendor exists
+    // 1. Cek apakah vendor exists dan ambil info schedule termasuk stock_level
     const vendorCheck = await client.query(
-      `SELECT id, local_schedule_id, vendor_status 
-       FROM local_schedule_vendors 
-       WHERE id = $1 AND is_active = true`,
-      [vendorId],
+      `SELECT 
+        lsv.id, 
+        lsv.local_schedule_id, 
+        lsv.vendor_status,
+        lsv.vendor_id,
+        lsv.do_numbers,
+        vd.vendor_name,
+        ls.model_name,
+        ls.stock_level as schedule_stock_level
+       FROM local_schedule_vendors lsv
+       LEFT JOIN vendor_detail vd ON vd.id = lsv.vendor_id
+       LEFT JOIN local_schedules ls ON ls.id = lsv.local_schedule_id
+       WHERE lsv.id = $1 AND lsv.is_active = true`,
+      [vendorId]
     );
 
     if (vendorCheck.rowCount === 0) {
@@ -1269,21 +1279,153 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       });
     }
 
-    const scheduleId = vendorCheck.rows[0].local_schedule_id;
+    const vendor = vendorCheck.rows[0];
+    const scheduleId = vendor.local_schedule_id;
+    const modelName = vendor.model_name;
+    
+    // EXTRACT stock level code dari format "M101 | SCN-MH" atau "M136 | SCN-LOG"
+    let rawStockLevel = vendor.schedule_stock_level || "";
+    let finalStockLevel = "M101"; // default ke M101
+    
+    console.log(`[APPROVE Vendor] Raw stock_level from DB: "${rawStockLevel}"`);
+    
+    if (rawStockLevel) {
+      // Extract kode: "M101 | SCN-MH" -> "M101"
+      const parts = rawStockLevel.split("|");
+      if (parts.length > 0) {
+        const code = parts[0].trim().toUpperCase();
+        if (code === "M101" || code === "M136" || code === "M1Y2" || code === "RTV") {
+          finalStockLevel = code;
+        }
+      }
+    }
+    
+    console.log(`[APPROVE Vendor] Final stock level: "${finalStockLevel}"`);
 
-    // Get employee ID from name
+    // 2. Get employee ID from name
     let approveById = null;
     if (approveByName) {
       const empResult = await client.query(
         `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
-        [approveByName],
+        [approveByName]
       );
       if (empResult.rowCount > 0) {
         approveById = empResult.rows[0].id;
       }
     }
 
-    // Update vendor status to IQC Progress with approve_by and approve_at
+    // 3. Get all parts for this vendor
+    const partsResult = await client.query(
+      `SELECT 
+        lsp.id,
+        lsp.part_code,
+        lsp.part_name,
+        lsp.quantity,
+        lsp.quantity_box,
+        lsp.unit,
+        lsp.do_number,
+        lsp.remark,
+        TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
+        km.id as kanban_master_id,
+        km.model
+       FROM local_schedule_parts lsp
+       LEFT JOIN kanban_master km ON km.part_code = lsp.part_code AND km.is_active = true
+       WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true`,
+      [vendorId]
+    );
+
+    console.log(`[APPROVE Vendor] Found ${partsResult.rowCount} parts to add to stock`);
+
+    // 4. Add each part to stock inventory
+    const stockResults = [];
+    for (const part of partsResult.rows) {
+      const qty = parseInt(part.quantity) || 0;
+      if (qty > 0) {
+        // Get current stock from kanban_master
+        let quantityBefore = 0;
+        if (part.kanban_master_id) {
+          const stockQuery = await client.query(
+            `SELECT stock_m101, stock_m136, stock_m1y2, stock_rtv 
+             FROM kanban_master WHERE id = $1`,
+            [part.kanban_master_id]
+          );
+          if (stockQuery.rows[0]) {
+            const stockRow = stockQuery.rows[0];
+            if (finalStockLevel === "M101") {
+              quantityBefore = parseInt(stockRow.stock_m101) || 0;
+            } else if (finalStockLevel === "M136") {
+              quantityBefore = parseInt(stockRow.stock_m136) || 0;
+            } else if (finalStockLevel === "M1Y2") {
+              quantityBefore = parseInt(stockRow.stock_m1y2) || 0;
+            } else if (finalStockLevel === "RTV") {
+              quantityBefore = parseInt(stockRow.stock_rtv) || 0;
+            }
+          }
+        }
+
+        const quantityAfter = quantityBefore + qty;
+
+        // Insert movement record ke stock_movements
+        const movementResult = await client.query(
+          `INSERT INTO stock_movements (
+            part_id, part_code, part_name, movement_type, stock_level,
+            quantity, quantity_before, quantity_after,
+            source_type, source_id, source_reference,
+            model, production_date, remark,
+            moved_by, moved_by_name, moved_at, is_active
+          ) VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13, $14, $15, CURRENT_TIMESTAMP, true)
+          RETURNING id`,
+          [
+            part.kanban_master_id,
+            part.part_code,
+            part.part_name,
+            finalStockLevel,
+            qty,
+            quantityBefore,
+            quantityAfter,
+            "local_schedule",
+            vendorId,
+            part.do_number || vendor.do_numbers,
+            part.model || modelName,
+            part.prod_date || null,
+            part.remark || `Approved from vendor: ${vendor.vendor_name || 'Unknown'}`,
+            approveById,
+            approveByName || null,
+          ]
+        );
+
+        console.log(`[APPROVE Vendor] Inserted movement for ${part.part_code}, ID: ${movementResult.rows[0].id}`);
+
+        // Update kanban_master stock if part exists in master
+        if (part.kanban_master_id) {
+          let updateColumn = "stock_m101";
+          if (finalStockLevel === "M136") updateColumn = "stock_m136";
+          else if (finalStockLevel === "M1Y2") updateColumn = "stock_m1y2";
+          else if (finalStockLevel === "RTV") updateColumn = "stock_rtv";
+
+          await client.query(
+            `UPDATE kanban_master 
+             SET ${updateColumn} = $1, updated_at = CURRENT_TIMESTAMP 
+             WHERE id = $2`,
+            [quantityAfter, part.kanban_master_id]
+          );
+          
+          console.log(`[APPROVE Vendor] Updated kanban_master.${updateColumn} for ${part.part_code}: ${quantityBefore} -> ${quantityAfter}`);
+        }
+
+        stockResults.push({
+          part_code: part.part_code,
+          movement_id: movementResult.rows[0].id,
+          quantity_added: qty,
+          stock_before: quantityBefore,
+          stock_after: quantityAfter,
+        });
+      }
+    }
+
+    console.log(`[APPROVE Vendor] Added ${stockResults.length} parts to ${finalStockLevel} stock`);
+
+    // 5. Update vendor status to IQC Progress
     const vendorResult = await client.query(
       `UPDATE local_schedule_vendors 
        SET vendor_status = 'IQC Progress', 
@@ -1292,29 +1434,29 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
            updated_at = CURRENT_TIMESTAMP 
        WHERE id = $1 AND is_active = true 
        RETURNING id, local_schedule_id, vendor_status, approve_by, approve_at`,
-      [vendorId, approveById],
+      [vendorId, approveById]
     );
 
-    console.log(`[APPROVE Vendor] Vendor approved:`, vendorResult.rows[0]);
+    console.log(`[APPROVE Vendor] Vendor status updated to IQC Progress`);
 
-    // Cek apakah semua vendor di schedule sudah IQC Progress
+    // 6. Cek apakah semua vendor di schedule sudah IQC Progress
     const allVendorsCheck = await client.query(
       `SELECT COUNT(*) as total, 
               SUM(CASE WHEN vendor_status = 'IQC Progress' THEN 1 ELSE 0 END) as matched_count
        FROM local_schedule_vendors 
        WHERE local_schedule_id = $1 AND is_active = true`,
-      [scheduleId],
+      [scheduleId]
     );
 
     const { total, matched_count } = allVendorsCheck.rows[0];
 
-    // Jika semua vendor sudah IQC Progress, update schedule status
+    // 7. Jika semua vendor sudah IQC Progress, update schedule status
     if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
       await client.query(
         `UPDATE local_schedules 
          SET status = 'IQC Progress', updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true`,
-        [scheduleId],
+        [scheduleId]
       );
       console.log(`[APPROVE Vendor] Schedule auto-updated to IQC Progress`);
     }
@@ -1323,10 +1465,13 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Vendor approved and moved to IQC Progress",
+      message: "Vendor approved and parts added to stock inventory",
       data: {
         vendor: vendorResult.rows[0],
         scheduleId: scheduleId,
+        stockLevel: finalStockLevel,
+        partsAddedToStock: stockResults.length,
+        stockMovements: stockResults,
       },
     });
   } catch (error) {
