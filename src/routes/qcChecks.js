@@ -3,52 +3,596 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-// Helper: resolve employee ID from name
-const resolveEmployeeId = async (client, empName) => {
+// Helper: Cari employee ID dari nama
+const resolveEmployeeId = async (empName) => {
   if (!empName) return null;
-  const q = await client.query(
-    `SELECT id FROM employees WHERE LOWER(emp_name)=LOWER($1) LIMIT 1`,
-    [empName]
-  );
-  return q.rows[0]?.id ?? null;
+  try {
+    const client = await pool.connect();
+    const result = await client.query(
+      `SELECT id FROM employees WHERE LOWER(emp_name) = LOWER($1) LIMIT 1`,
+      [empName]
+    );
+    client.release();
+    return result.rows[0]?.id ?? null;
+  } catch (error) {
+    console.error("Error resolving employee:", empName);
+    return null;
+  }
 };
 
-// ====== CHECK IF PART + DATE IS COMPLETE (untuk IQC Progress filter) ======
-// Endpoint ini digunakan oleh LocalSchedulePage untuk mengecek status
+// ====== GET all QC Checks ======
+router.get("/", async (req, res) => {
+  try {
+    const { status, part_code, date_from, date_to, data_from } = req.query;
+
+    console.log(`[QC GET] status=${status}, part=${part_code}`);
+
+    let query = `
+      SELECT 
+        id,
+        part_code,
+        part_name,
+        vendor_name,
+        TO_CHAR(production_date, 'YYYY-MM-DD') as production_date,
+        data_from,
+        status,
+        qc_status,
+        remark,
+        approved_by_name as approved_by,
+        approved_at,
+        rejected_by_name as rejected_by,
+        rejected_at,
+        created_by,
+        created_at,
+        updated_at,
+        source_vendor_id,
+        source_part_id
+      FROM qc_checks
+      WHERE is_active = true
+    `;
+
+    const params = [];
+    let paramCount = 0;
+
+    if (status) {
+      paramCount++;
+      query += ` AND status = $${paramCount}`;
+      params.push(status);
+    }
+
+    if (part_code) {
+      paramCount++;
+      query += ` AND part_code ILIKE $${paramCount}`;
+      params.push(`%${part_code}%`);
+    }
+
+    if (date_from) {
+      paramCount++;
+      query += ` AND production_date >= $${paramCount}::date`;
+      params.push(date_from);
+    }
+
+    if (date_to) {
+      paramCount++;
+      query += ` AND production_date <= $${paramCount}::date`;
+      params.push(date_to);
+    }
+
+    if (data_from) {
+      paramCount++;
+      query += ` AND data_from = $${paramCount}`;
+      params.push(data_from);
+    }
+
+    query += ` ORDER BY created_at DESC`;
+
+    const result = await pool.query(query, params);
+
+    console.log(`[QC GET] Found ${result.rows.length} records`);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      total: result.rows.length,
+    });
+  } catch (error) {
+    console.error("[QC GET] Error:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch QC checks",
+      error: error.message,
+    });
+  }
+});
+
+// ====== CREATE QC Check ======
+router.post("/", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const {
+      part_code,
+      part_name,
+      vendor_name,
+      production_date,
+      data_from = "Create",
+      status = "Pending",
+      approved_by_name,
+      created_by_name,
+      source_vendor_id,  // For auto-move to Pass
+      source_part_id,    // For reference
+      isLastQcCheck = false,  // NEW: Flag from frontend
+    } = req.body;
+
+    console.log(`[QC CREATE] ${part_code} - ${production_date} (vendor_id: ${source_vendor_id}, isLastQcCheck: ${isLastQcCheck})`);
+
+    if (!part_code || !production_date) {
+      return res.status(400).json({
+        success: false,
+        message: "part_code and production_date are required",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // Check duplicate
+    const existingCheck = await client.query(
+      `SELECT id FROM qc_checks 
+       WHERE part_code = $1 
+       AND production_date = $2::date 
+       AND is_active = true
+       LIMIT 1`,
+      [part_code, production_date]
+    );
+
+    if (existingCheck.rowCount > 0) {
+      await client.query("ROLLBACK");
+      return res.status(200).json({
+        success: true,
+        message: "QC Check already exists",
+        data: existingCheck.rows[0],
+        alreadyExists: true,
+      });
+    }
+
+    // Cari ID employee jika ada namanya
+    let approvedById = null;
+    if (approved_by_name) {
+      approvedById = await resolveEmployeeId(approved_by_name);
+    }
+
+    const result = await client.query(
+      `INSERT INTO qc_checks (
+        part_code, part_name, vendor_name, production_date, data_from,
+        status, approved_by, approved_by_name, approved_at,
+        source_vendor_id, source_part_id,
+        created_by, created_at, updated_at, is_active
+      ) VALUES (
+        $1, $2, $3, $4::date, $5,
+        $6, $7, $8, 
+        ${status === "Complete" && approved_by_name ? "CURRENT_TIMESTAMP" : "NULL"},
+        $9, $10,
+        $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true
+      )
+      RETURNING 
+        id,
+        part_code,
+        part_name,
+        vendor_name,
+        TO_CHAR(production_date, 'YYYY-MM-DD') as production_date,
+        data_from,
+        status,
+        source_vendor_id,
+        approved_by_name as approved_by,
+        approved_at,
+        created_by,
+        created_at`,
+      [
+        part_code,
+        part_name || null,
+        vendor_name || null,
+        production_date,
+        data_from,
+        status,
+        approvedById,
+        approved_by_name || null,
+        source_vendor_id || null,
+        source_part_id || null,
+        created_by_name || approved_by_name || "System",
+      ]
+    );
+
+    let vendorMovedToPass = false;
+
+    // AUTO-CHECK: If this is the last QC check for vendor, move to Pass
+    if (data_from === 'M136' && status === 'Complete' && source_vendor_id && isLastQcCheck) {
+      console.log(`[QC CREATE] Last QC check for vendor ${source_vendor_id}! Moving to Pass`);
+
+      try {
+        // Recalculate total_pallet before moving
+        const palletCalc = await client.query(
+          `SELECT COALESCE(SUM(quantity_box), 0) as total_boxes
+           FROM oversea_schedule_parts
+           WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
+          [source_vendor_id]
+        );
+
+        const totalPallet = parseInt(palletCalc.rows[0]?.total_boxes) || 0;
+
+        // Update vendor status AND total_pallet AND set sample timestamp
+        await client.query(
+          `UPDATE oversea_schedule_vendors 
+           SET vendor_status = 'Sample',
+              sample_by = $2,              
+              sample_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $1 AND is_active = true`,
+          [source_vendor_id, approvedById]  
+        );
+
+        console.log(`[QC CREATE] Vendor ${source_vendor_id} moved to Pass with total_pallet=${totalPallet}`);
+
+        // Check if should update schedule status
+        const vendorInfo = await client.query(
+          `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
+          [source_vendor_id]
+        );
+
+        if (vendorInfo.rowCount > 0) {
+          const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
+
+          const allVendorsCheck = await client.query(
+            `SELECT COUNT(*) as total, 
+                      SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as sample_count
+               FROM oversea_schedule_vendors 
+               WHERE oversea_schedule_id = $1 AND is_active = true`,
+            [scheduleId]
+          );
+
+          const { total, sample_count } = allVendorsCheck.rows[0];
+          if (parseInt(total) > 0 && parseInt(total) === parseInt(sample_count)) {
+            // Recalculate schedule total_pallet (sum of all vendors)
+            const schedulePalletCalc = await client.query(
+              `SELECT COALESCE(SUM(total_pallet), 0) as total_pallets
+                 FROM oversea_schedule_vendors
+                 WHERE oversea_schedule_id = $1 AND is_active = true`,
+              [scheduleId]
+            );
+
+            const scheduleTotalPallet = parseInt(schedulePalletCalc.rows[0]?.total_pallets) || 0;
+
+            await client.query(
+              `UPDATE oversea_schedules 
+                 SET status = 'Sample',
+                     total_pallet = $2,
+                     updated_at = CURRENT_TIMESTAMP 
+                 WHERE id = $1 AND is_active = true`,
+              [scheduleId, scheduleTotalPallet]
+            );
+            console.log(`[QC CREATE] Schedule ${scheduleId} moved to Sample with total_pallet=${scheduleTotalPallet}`);
+          }
+        }
+
+        vendorMovedToPass = true;
+      } catch (autoMoveError) {
+        console.error(`[QC CREATE] Error auto-moving vendor:`, autoMoveError.message);
+        // Don't rollback, just log
+      }
+    }
+
+    await client.query("COMMIT");
+
+    console.log(`[QC CREATE] Success: ID ${result.rows[0].id}${vendorMovedToPass ? ' (Vendor moved to Pass)' : ''}`);
+
+    res.status(201).json({
+      success: true,
+      message: "QC Check created successfully",
+      data: result.rows[0],
+      vendorMovedToPass: vendorMovedToPass,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[QC CREATE] Error:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create QC check",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ====== APPROVE QC Check ======
+router.put("/:id/approve", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { approved_by_name, isLastQcCheck } = req.body;
+
+    console.log(`[QC APPROVE] ID ${id} by ${approved_by_name}, isLastQcCheck: ${isLastQcCheck}`);
+
+    if (!approved_by_name) {
+      return res.status(400).json({
+        success: false,
+        message: "approved_by_name is required",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    const approvedById = await resolveEmployeeId(approved_by_name);
+
+    // Get QC check details before update (need source_vendor_id for auto-move)
+    const qcCheckBefore = await client.query(
+      `SELECT source_vendor_id, data_from FROM qc_checks WHERE id = $1 AND is_active = true`,
+      [id]
+    );
+
+    if (qcCheckBefore.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        message: "QC Check not found",
+      });
+    }
+
+    const { source_vendor_id, data_from } = qcCheckBefore.rows[0];
+
+    // Update status from "M136 Part" to "Complete"
+    const result = await client.query(
+      `UPDATE qc_checks 
+       SET status = 'Complete',
+           approved_by = $2,
+           approved_by_name = $3,
+           approved_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND is_active = true
+       RETURNING 
+         id,
+         part_code,
+         status,
+         approved_by_name as approved_by,
+         approved_at`,
+      [id, approvedById, approved_by_name]
+    );
+
+    let vendorMovedToPass = false;
+
+    // AUTO-MOVE TO PASS: If this is the last QC check for M136 vendor
+    if (data_from === 'M136' && isLastQcCheck && source_vendor_id) {
+      console.log(`[QC APPROVE] Last QC check for vendor ${source_vendor_id}! Moving to Pass`);
+
+      try {
+        // Recalculate total_pallet before moving
+        const palletCalc = await client.query(
+          `SELECT COALESCE(SUM(quantity_box), 0) as total_boxes
+           FROM oversea_schedule_parts
+           WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
+          [source_vendor_id]
+        );
+
+        const totalPallet = parseInt(palletCalc.rows[0]?.total_boxes) || 0;
+
+        // Update vendor status AND total_pallet AND set sample timestamp
+        await client.query(
+          `UPDATE oversea_schedule_vendors 
+            SET vendor_status = 'Sample',
+                sample_by = $2,              
+                sample_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP 
+            WHERE id = $1 AND is_active = true`,
+          [source_vendor_id, approvedById]  
+        );
+        console.log(`[QC APPROVE] Vendor ${source_vendor_id} moved to Pass with total_pallet=${totalPallet}`);
+
+        // Check if should update schedule status
+        const vendorInfo = await client.query(
+          `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
+          [source_vendor_id]
+        );
+
+        if (vendorInfo.rowCount > 0) {
+          const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
+
+          const allVendorsCheck = await client.query(
+            `SELECT COUNT(*) as total, 
+                    SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as sample_count
+             FROM oversea_schedule_vendors 
+             WHERE oversea_schedule_id = $1 AND is_active = true`,
+            [scheduleId]
+          );
+
+          const { total, sample_count } = allVendorsCheck.rows[0];
+          if (parseInt(total) > 0 && parseInt(total) === parseInt(sample_count)) {
+            // Recalculate schedule total_pallet (sum of all vendors)
+            const schedulePalletCalc = await client.query(
+              `SELECT COALESCE(SUM(total_pallet), 0) as total_pallets
+               FROM oversea_schedule_vendors
+               WHERE oversea_schedule_id = $1 AND is_active = true`,
+              [scheduleId]
+            );
+
+            const scheduleTotalPallet = parseInt(schedulePalletCalc.rows[0]?.total_pallets) || 0;
+
+            await client.query(
+              `UPDATE oversea_schedules 
+               SET status = 'Sample',
+                   total_pallet = $2,
+                   updated_at = CURRENT_TIMESTAMP 
+               WHERE id = $1 AND is_active = true`,
+              [scheduleId, scheduleTotalPallet]
+            );
+            console.log(`[QC APPROVE] Schedule ${scheduleId} moved to Sample with total_pallet=${scheduleTotalPallet}`);
+          }
+        }
+
+        vendorMovedToPass = true;
+      } catch (autoMoveError) {
+        console.error(`[QC APPROVE] Error auto-moving vendor:`, autoMoveError.message);
+        // Don't rollback, just log
+      }
+    }
+
+    await client.query("COMMIT");
+
+    console.log(`[QC APPROVE] Success: ID ${id}${vendorMovedToPass ? ' (Vendor moved to Pass)' : ''}`);
+
+    res.json({
+      success: true,
+      message: "QC Check approved successfully",
+      data: result.rows[0],
+      vendorMovedToPass: vendorMovedToPass,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[QC APPROVE] Error:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to approve QC check",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ====== REJECT QC Check ======
+router.put("/:id/reject", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { rejected_by_name, remark } = req.body;
+
+    console.log(`[QC REJECT] ID ${id} by ${rejected_by_name}`);
+
+    if (!rejected_by_name) {
+      return res.status(400).json({
+        success: false,
+        message: "rejected_by_name is required",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    const rejectedById = await resolveEmployeeId(rejected_by_name);
+
+    const result = await client.query(
+      `UPDATE qc_checks 
+       SET status = 'Reject',
+           rejected_by = $2,
+           rejected_by_name = $3,
+           rejected_at = CURRENT_TIMESTAMP,
+           remark = COALESCE($4, remark),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND is_active = true
+       RETURNING 
+         id,
+         part_code,
+         status,
+         rejected_by_name as rejected_by,
+         rejected_at`,
+      [id, rejectedById, rejected_by_name, remark]
+    );
+
+    if (result.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        success: false,
+        message: "QC Check not found",
+      });
+    }
+
+    await client.query("COMMIT");
+
+    console.log(`[QC REJECT] Success: ID ${id}`);
+
+    res.json({
+      success: true,
+      message: "QC Check rejected successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[QC REJECT] Error:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reject QC check",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ====== DELETE QC Check ======
+router.delete("/:id", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    console.log(`[QC DELETE] ID ${id}`);
+
+    const result = await client.query(
+      `UPDATE qc_checks 
+       SET is_active = false,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND is_active = true
+       RETURNING id, part_code`,
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "QC Check not found",
+      });
+    }
+
+    await client.query("COMMIT");
+
+    console.log(`[QC DELETE] Success: ID ${id}`);
+
+    res.json({
+      success: true,
+      message: "QC Check deleted successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[QC DELETE] Error:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete QC check",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ====== Endpoint Penting Lainnya ======
+
+// CHECK IF PART + DATE IS COMPLETE
 router.get("/check-complete/:part_code/:production_date", async (req, res) => {
   try {
     const { part_code, production_date } = req.params;
 
-    console.log(`[CHECK COMPLETE] Checking: ${part_code} - ${production_date}`);
-
-    const query = `
-      SELECT 
-        id,
-        part_code,
-        TO_CHAR(production_date, 'YYYY-MM-DD') as production_date,
-        status,
-        data_from
-      FROM qc_checks
-      WHERE part_code = $1 
-        AND DATE(production_date) = DATE($2::date)
-        AND is_active = true
-        AND status = 'Complete'
-      LIMIT 1
-    `;
-
-    const result = await pool.query(query, [part_code, production_date]);
-
-    const isComplete = result.rows.length > 0;
-
-    console.log(`[CHECK COMPLETE] Result: ${isComplete ? 'Complete' : 'Not Complete'}`);
+    const result = await pool.query(
+      `SELECT id FROM qc_checks
+       WHERE part_code = $1 
+         AND production_date = $2::date
+         AND is_active = true
+         AND status = 'Complete'
+       LIMIT 1`,
+      [part_code, production_date]
+    );
 
     res.json({
       success: true,
-      isComplete: isComplete,
-      data: result.rows[0] || null,
+      isComplete: result.rows.length > 0,
     });
   } catch (error) {
-    console.error("[CHECK COMPLETE] Error:", error);
+    console.error("[CHECK COMPLETE] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to check completion status",
@@ -57,11 +601,10 @@ router.get("/check-complete/:part_code/:production_date", async (req, res) => {
   }
 });
 
-// ====== BULK CHECK COMPLETE (untuk multiple dates sekaligus) ======
-// Endpoint ini lebih efisien untuk mengecek banyak part+date sekaligus
+// BULK CHECK COMPLETE
 router.post("/check-complete-bulk", async (req, res) => {
   try {
-    const { checks } = req.body; // Array of { part_code, production_date }
+    const { checks } = req.body;
 
     if (!checks || !Array.isArray(checks) || checks.length === 0) {
       return res.status(400).json({
@@ -70,10 +613,9 @@ router.post("/check-complete-bulk", async (req, res) => {
       });
     }
 
-    console.log(`[BULK CHECK COMPLETE] Checking ${checks.length} items`);
+    console.log(`[BULK CHECK] Checking ${checks.length} items`);
 
-    // Build query untuk check multiple items
-    const conditions = checks.map((_, idx) => 
+    const conditions = checks.map((_, idx) =>
       `(part_code = $${idx * 2 + 1} AND DATE(production_date) = DATE($${idx * 2 + 2}::date))`
     ).join(" OR ");
 
@@ -92,21 +634,19 @@ router.post("/check-complete-bulk", async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Create a map of complete items
     const completeMap = {};
     result.rows.forEach(row => {
       const key = `${row.part_code}_${row.production_date}`;
       completeMap[key] = true;
     });
 
-    // Return results for each check
     const results = checks.map(check => ({
       part_code: check.part_code,
       production_date: check.production_date,
       isComplete: completeMap[`${check.part_code}_${check.production_date}`] || false,
     }));
 
-    console.log(`[BULK CHECK COMPLETE] Found ${result.rows.length} complete items`);
+    console.log(`[BULK CHECK] Found ${result.rows.length} complete items`);
 
     res.json({
       success: true,
@@ -115,7 +655,7 @@ router.post("/check-complete-bulk", async (req, res) => {
       totalChecked: checks.length,
     });
   } catch (error) {
-    console.error("[BULK CHECK COMPLETE] Error:", error);
+    console.error("[BULK CHECK] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to bulk check completion status",
@@ -124,292 +664,27 @@ router.post("/check-complete-bulk", async (req, res) => {
   }
 });
 
-// ====== CREATE QC Check ======
-// Digunakan oleh:
-// 1. AddQCCheckPage (data_from = "Create")
-// 2. LocalSchedulePage - Move to Sample action (data_from = "Sample")
-router.post("/", async (req, res) => {
-  const client = await pool.connect();
+// GET Current Check tab (Pending status)
+router.get("/current-check", async (req, res) => {
   try {
-    const {
-      part_code,
-      part_name,
-      vendor_name,
-      vendor_id,
-      vendor_type,
-      production_date,
-      approved_by,
-      data_from, // "Create" dari AddQCCheckPage, "Sample" dari LocalSchedulePage
-      local_schedule_part_id, // NEW: ID dari local_schedule_parts (untuk tracking)
-      created_by, // NEW: Siapa yang membuat (untuk Sample)
-      skip_duplicate_check, // NEW: Flag untuk skip duplicate check
-    } = req.body || {};
-
-    console.log("[POST QC Check] Received data:", req.body);
-
-    if (!part_code || !production_date) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields: part_code and production_date are required",
-      });
-    }
-
-    await client.query("BEGIN");
-
-    // ====== NEW: Check for duplicate (same part_code + production_date) ======
-    if (!skip_duplicate_check) {
-      const duplicateCheck = await client.query(`
-        SELECT id, part_code, TO_CHAR(production_date, 'YYYY-MM-DD') as production_date, status, data_from
-        FROM qc_checks
-        WHERE part_code = $1 
-          AND DATE(production_date) = DATE($2::date)
-          AND is_active = true
-        LIMIT 1
-      `, [part_code, production_date]);
-
-      if (duplicateCheck.rows.length > 0) {
-        await client.query("ROLLBACK");
-        console.log("[POST QC Check] Duplicate found:", duplicateCheck.rows[0]);
-        return res.status(200).json({
-          success: true,
-          message: "QC Check already exists for this part and date",
-          data: duplicateCheck.rows[0],
-          alreadyExists: true,
-        });
-      }
-    }
-
-    // Resolve approved_by to employee ID (jika ada)
-    const approvedById = await resolveEmployeeId(client, approved_by);
-
-    // Determine status based on data_from
-    // - "Create" dari AddQCCheckPage = langsung Complete
-    // - "Sample" dari LocalSchedulePage = status bisa "Pending" atau langsung "Complete"
-    const initialStatus = data_from === "Sample" ? "Pending" : "Complete";
-
-    const insertQuery = `
-      INSERT INTO qc_checks (
-        part_code,
-        part_name,
-        vendor_name,
-        vendor_id,
-        vendor_type,
-        production_date,
-        approved_by,
-        approved_by_name,
-        approved_at,
-        data_from,
-        local_schedule_part_id,
-        created_by,
-        status,
-        created_at,
-        updated_at,
-        is_active
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6::date, $7, $8, 
-        ${data_from === "Create" ? "CURRENT_TIMESTAMP" : "NULL"},
-        $9, $10, $11, $12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true
-      )
-      RETURNING 
+    const result = await pool.query(
+      `SELECT 
         id,
         part_code,
         part_name,
         vendor_name,
-        vendor_id,
-        vendor_type,
         TO_CHAR(production_date, 'YYYY-MM-DD') as production_date,
-        approved_by,
-        approved_by_name,
-        approved_at,
         data_from,
-        local_schedule_part_id,
-        created_by,
         status,
+        created_by,
         created_at
-    `;
+       FROM qc_checks
+       WHERE is_active = true
+         AND status = 'Pending'
+       ORDER BY created_at DESC`
+    );
 
-    const values = [
-      part_code,
-      part_name || null,
-      vendor_name || null,
-      vendor_id || null,
-      vendor_type || null,
-      production_date,
-      approvedById,
-      approved_by || null, // Store name directly for display
-      data_from || "Create",
-      local_schedule_part_id || null, // NEW
-      created_by || approved_by || null, // NEW
-      initialStatus,
-    ];
-
-    const result = await client.query(insertQuery, values);
-
-    await client.query("COMMIT");
-
-    console.log("[POST QC Check] Successfully created:", result.rows[0]);
-
-    res.status(201).json({
-      success: true,
-      message: "QC Check created successfully",
-      data: result.rows[0],
-      alreadyExists: false,
-    });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("[POST QC Check] Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to create QC check",
-      error: error.message,
-    });
-  } finally {
-    client.release();
-  }
-});
-
-// ====== GET all QC Checks (for Complete tab & IQC Progress check) ======
-router.get("/", async (req, res) => {
-  try {
-    const { status, date_from, date_to, part_code, data_from, vendor_id } = req.query;
-
-    console.log("[GET QC Checks] Query params:", req.query);
-
-    let query = `
-      SELECT 
-        qc.id,
-        qc.part_code,
-        qc.part_name,
-        qc.vendor_name,
-        qc.vendor_id,
-        qc.vendor_type,
-        TO_CHAR(qc.production_date, 'YYYY-MM-DD') as production_date,
-        qc.approved_by,
-        qc.approved_by_name,
-        qc.approved_at,
-        qc.rejected_by,
-        qc.rejected_by_name,
-        qc.rejected_at,
-        qc.data_from,
-        qc.local_schedule_part_id,
-        qc.created_by,
-        qc.status,
-        qc.qc_status,
-        qc.remark,
-        qc.created_at,
-        qc.updated_at,
-        e.emp_name as approved_by_emp_name
-      FROM qc_checks qc
-      LEFT JOIN employees e ON e.id = qc.approved_by
-      WHERE qc.is_active = true
-    `;
-
-    const params = [];
-    let paramCount = 0;
-
-    // Filter by status
-    if (status) {
-      paramCount++;
-      query += ` AND qc.status = $${paramCount}`;
-      params.push(status);
-    }
-
-    // Filter by date range
-    if (date_from) {
-      paramCount++;
-      query += ` AND qc.production_date >= $${paramCount}::date`;
-      params.push(date_from);
-    }
-
-    if (date_to) {
-      paramCount++;
-      query += ` AND qc.production_date <= $${paramCount}::date`;
-      params.push(date_to);
-    }
-
-    // Filter by part code
-    if (part_code) {
-      paramCount++;
-      query += ` AND qc.part_code ILIKE $${paramCount}`;
-      params.push(`%${part_code}%`);
-    }
-
-    // Filter by data_from
-    if (data_from) {
-      paramCount++;
-      query += ` AND qc.data_from = $${paramCount}`;
-      params.push(data_from);
-    }
-
-    // Filter by vendor_id (NEW)
-    if (vendor_id) {
-      paramCount++;
-      query += ` AND qc.vendor_id = $${paramCount}`;
-      params.push(vendor_id);
-    }
-
-    query += ` ORDER BY qc.created_at DESC, qc.production_date DESC`;
-
-    console.log("[GET QC Checks] Executing query:", query);
-
-    const result = await pool.query(query, params);
-
-    console.log(`[GET QC Checks] Found ${result.rows.length} records`);
-
-    // Format the response to use approved_by_name for display
-    const formattedData = result.rows.map((row) => ({
-      ...row,
-      approved_by: row.approved_by_name || row.approved_by_emp_name || "Unknown",
-    }));
-
-    res.json({
-      success: true,
-      data: formattedData,
-      total: formattedData.length,
-    });
-  } catch (error) {
-    console.error("[GET QC Checks] Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch QC checks",
-      error: error.message,
-    });
-  }
-});
-
-// ====== GET QC Checks for Current Check tab (Pending status from Sample) ======
-router.get("/current-check", async (req, res) => {
-  try {
-    console.log("[GET Current Check] Fetching pending samples...");
-
-    const query = `
-      SELECT 
-        qc.id,
-        qc.part_code,
-        qc.part_name,
-        qc.vendor_name,
-        qc.vendor_id,
-        qc.vendor_type,
-        TO_CHAR(qc.production_date, 'YYYY-MM-DD') as production_date,
-        qc.approved_by,
-        qc.approved_by_name,
-        qc.approved_at,
-        qc.data_from,
-        qc.local_schedule_part_id,
-        qc.created_by,
-        qc.status,
-        qc.remark,
-        qc.created_at,
-        qc.updated_at
-      FROM qc_checks qc
-      WHERE qc.is_active = true
-        AND qc.status = 'Pending'
-      ORDER BY qc.created_at DESC
-    `;
-
-    const result = await pool.query(query);
-
-    console.log(`[GET Current Check] Found ${result.rows.length} pending items`);
+    console.log(`[CURRENT CHECK] Found ${result.rows.length} pending items`);
 
     res.json({
       success: true,
@@ -417,7 +692,7 @@ router.get("/current-check", async (req, res) => {
       total: result.rows.length,
     });
   } catch (error) {
-    console.error("[GET Current Check] Error:", error);
+    console.error("[CURRENT CHECK] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to fetch current check items",
@@ -426,183 +701,22 @@ router.get("/current-check", async (req, res) => {
   }
 });
 
-// ====== APPROVE/COMPLETE QC Check (untuk Current Check tab) ======
-router.put("/:id/approve", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const { id } = req.params;
-    const { approved_by, approved_by_name } = req.body || {};
-
-    console.log(`[APPROVE QC Check] Approving ID: ${id} by ${approved_by_name || approved_by}`);
-
-    await client.query("BEGIN");
-
-    // Check if exists
-    const checkQuery = `
-      SELECT id, status FROM qc_checks WHERE id = $1 AND is_active = true
-    `;
-    const checkResult = await client.query(checkQuery, [id]);
-
-    if (checkResult.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({
-        success: false,
-        message: "QC Check not found",
-      });
-    }
-
-    // Resolve approved_by to employee ID
-    const approvedById = await resolveEmployeeId(client, approved_by_name || approved_by);
-
-    const updateQuery = `
-      UPDATE qc_checks
-      SET 
-        status = 'Complete',
-        data_from = 'Check',
-        approved_by = $1,
-        approved_by_name = $2,
-        approved_at = CURRENT_TIMESTAMP,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $3
-      RETURNING 
-        id,
-        part_code,
-        part_name,
-        TO_CHAR(production_date, 'YYYY-MM-DD') as production_date,
-        approved_by,
-        approved_by_name,
-        approved_at,
-        status,
-        data_from
-    `;
-
-    const result = await client.query(updateQuery, [
-      approvedById,
-      approved_by_name || approved_by || null,
-      id,
-    ]);
-
-    await client.query("COMMIT");
-
-    console.log(`[APPROVE QC Check] Successfully approved ID: ${id}`);
-
-    res.json({
-      success: true,
-      message: "QC Check approved successfully",
-      data: result.rows[0],
-    });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("[APPROVE QC Check] Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to approve QC check",
-      error: error.message,
-    });
-  } finally {
-    client.release();
-  }
-});
-
-// ====== REJECT QC Check ======
-router.put("/:id/reject", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const { id } = req.params;
-    const { rejected_by, rejected_by_name } = req.body || {};
-
-    console.log(`[REJECT QC Check] Rejecting ID: ${id} by ${rejected_by_name || rejected_by}`);
-
-    await client.query("BEGIN");
-
-    // Check if exists
-    const checkQuery = `
-      SELECT id, status FROM qc_checks WHERE id = $1 AND is_active = true
-    `;
-    const checkResult = await client.query(checkQuery, [id]);
-
-    if (checkResult.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({
-        success: false,
-        message: "QC Check not found",
-      });
-    }
-
-    // Resolve rejected_by to employee ID
-    const rejectedById = await resolveEmployeeId(client, rejected_by_name || rejected_by);
-
-    const updateQuery = `
-      UPDATE qc_checks
-      SET 
-        status = 'Reject',
-        rejected_by = $1,
-        rejected_by_name = $2,
-        rejected_at = CURRENT_TIMESTAMP,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $3
-      RETURNING 
-        id,
-        part_code,
-        part_name,
-        TO_CHAR(production_date, 'YYYY-MM-DD') as production_date,
-        rejected_by,
-        rejected_by_name,
-        rejected_at,
-        status
-    `;
-
-    const result = await client.query(updateQuery, [
-      rejectedById,
-      rejected_by_name || rejected_by || null,
-      id,
-    ]);
-
-    await client.query("COMMIT");
-
-    console.log(`[REJECT QC Check] Successfully rejected ID: ${id}`);
-
-    res.json({
-      success: true,
-      message: "QC Check rejected successfully",
-      data: result.rows[0],
-    });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("[REJECT QC Check] Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to reject QC check",
-      error: error.message,
-    });
-  } finally {
-    client.release();
-  }
-});
-
-// ====== UPDATE QC STATUS (for editing status in Current Check) ======
+// UPDATE QC STATUS
 router.put("/:id/update-status", async (req, res) => {
   try {
     const { id } = req.params;
-    const { qc_status } = req.body || {};
+    const { qc_status } = req.body;
 
-    console.log(`[UPDATE QC STATUS] Updating ID: ${id} to status: ${qc_status}`);
+    console.log(`[UPDATE STATUS] ID ${id} to ${qc_status}`);
 
-    const updateQuery = `
-      UPDATE qc_checks
-      SET 
-        qc_status = $1,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2 AND is_active = true
-      RETURNING 
-        id,
-        part_code,
-        part_name,
-        qc_status,
-        status
-    `;
-
-    const result = await pool.query(updateQuery, [qc_status || null, id]);
+    const result = await pool.query(
+      `UPDATE qc_checks
+       SET qc_status = $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND is_active = true
+       RETURNING id, part_code, qc_status`,
+      [qc_status, id]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -611,7 +725,7 @@ router.put("/:id/update-status", async (req, res) => {
       });
     }
 
-    console.log(`[UPDATE QC STATUS] Successfully updated ID: ${id}`);
+    console.log(`[UPDATE STATUS] Success: ID ${id}`);
 
     res.json({
       success: true,
@@ -619,7 +733,7 @@ router.put("/:id/update-status", async (req, res) => {
       data: result.rows[0],
     });
   } catch (error) {
-    console.error("[UPDATE QC STATUS] Error:", error);
+    console.error("[UPDATE STATUS] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to update QC status",
@@ -628,11 +742,13 @@ router.put("/:id/update-status", async (req, res) => {
   }
 });
 
-// ====== BULK APPROVE QC Checks ======
+// BULK APPROVE
 router.post("/bulk-approve", async (req, res) => {
   const client = await pool.connect();
   try {
-    const { ids, approved_by, approved_by_name } = req.body;
+    const { ids, approved_by_name } = req.body;
+
+    console.log(`[BULK APPROVE] ${ids.length} items by ${approved_by_name}`);
 
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({
@@ -641,36 +757,26 @@ router.post("/bulk-approve", async (req, res) => {
       });
     }
 
-    console.log(`[BULK APPROVE] Approving ${ids.length} items by ${approved_by_name || approved_by}`);
-
     await client.query("BEGIN");
 
-    // Resolve approved_by to employee ID
-    const approvedById = await resolveEmployeeId(client, approved_by_name || approved_by);
+    const approvedById = await resolveEmployeeId(approved_by_name);
 
-    const updateQuery = `
-      UPDATE qc_checks
-      SET 
-        status = 'Complete',
-        data_from = 'Check',
-        approved_by = $1,
-        approved_by_name = $2,
-        approved_at = CURRENT_TIMESTAMP,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ANY($3::int[])
-        AND is_active = true
-      RETURNING id
-    `;
-
-    const result = await client.query(updateQuery, [
-      approvedById,
-      approved_by_name || approved_by || null,
-      ids,
-    ]);
+    const result = await client.query(
+      `UPDATE qc_checks
+       SET status = 'Complete',
+           approved_by = $1,
+           approved_by_name = $2,
+           approved_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ANY($3::int[])
+         AND is_active = true
+       RETURNING id`,
+      [approvedById, approved_by_name, ids]
+    );
 
     await client.query("COMMIT");
 
-    console.log(`[BULK APPROVE] Successfully approved ${result.rows.length} items`);
+    console.log(`[BULK APPROVE] Success: ${result.rows.length} items`);
 
     res.json({
       success: true,
@@ -680,7 +786,7 @@ router.post("/bulk-approve", async (req, res) => {
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("[BULK APPROVE] Error:", error);
+    console.error("[BULK APPROVE] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to bulk approve QC checks",
@@ -691,37 +797,28 @@ router.post("/bulk-approve", async (req, res) => {
   }
 });
 
-// ====== GET single QC Check by ID ======
+// GET single QC Check by ID
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const query = `
-      SELECT 
-        qc.id,
-        qc.part_code,
-        qc.part_name,
-        qc.vendor_name,
-        qc.vendor_id,
-        qc.vendor_type,
-        TO_CHAR(qc.production_date, 'YYYY-MM-DD') as production_date,
-        qc.approved_by,
-        qc.approved_by_name,
-        qc.approved_at,
-        qc.data_from,
-        qc.local_schedule_part_id,
-        qc.created_by,
-        qc.status,
-        qc.remark,
-        qc.created_at,
-        qc.updated_at,
-        e.emp_name as approved_by_emp_name
-      FROM qc_checks qc
-      LEFT JOIN employees e ON e.id = qc.approved_by
-      WHERE qc.id = $1 AND qc.is_active = true
-    `;
-
-    const result = await pool.query(query, [id]);
+    const result = await pool.query(
+      `SELECT 
+        id,
+        part_code,
+        part_name,
+        vendor_name,
+        TO_CHAR(production_date, 'YYYY-MM-DD') as production_date,
+        data_from,
+        status,
+        approved_by_name as approved_by,
+        approved_at,
+        created_by,
+        created_at
+       FROM qc_checks
+       WHERE id = $1 AND is_active = true`,
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -730,179 +827,17 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    const row = result.rows[0];
     res.json({
       success: true,
-      data: {
-        ...row,
-        approved_by: row.approved_by_name || row.approved_by_emp_name || "Unknown",
-      },
+      data: result.rows[0],
     });
   } catch (error) {
-    console.error("[GET QC Check by ID] Error:", error);
+    console.error("[GET BY ID] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to fetch QC check",
       error: error.message,
     });
-  }
-});
-
-// ====== DELETE QC Check ======
-router.delete("/:id", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const { id } = req.params;
-
-    console.log(`[DELETE QC Check] Deleting ID: ${id}`);
-
-    await client.query("BEGIN");
-
-    // Check if exists
-    const checkQuery = `
-      SELECT id FROM qc_checks WHERE id = $1 AND is_active = true
-    `;
-    const checkResult = await client.query(checkQuery, [id]);
-
-    if (checkResult.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({
-        success: false,
-        message: "QC Check not found or already deleted",
-      });
-    }
-
-    // Soft delete (set is_active to false)
-    const deleteQuery = `
-      UPDATE qc_checks
-      SET is_active = false, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1
-      RETURNING id
-    `;
-
-    const result = await client.query(deleteQuery, [id]);
-
-    await client.query("COMMIT");
-
-    console.log(`[DELETE QC Check] Successfully deleted ID: ${id}`);
-
-    res.json({
-      success: true,
-      message: "QC Check deleted successfully",
-      data: { deletedId: result.rows[0].id },
-    });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("[DELETE QC Check] Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to delete QC check",
-      error: error.message,
-    });
-  } finally {
-    client.release();
-  }
-});
-
-// ====== UPDATE QC Check ======
-router.put("/:id", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const { id } = req.params;
-    const {
-      part_code,
-      part_name,
-      vendor_name,
-      vendor_id,
-      vendor_type,
-      production_date,
-      status,
-      remark,
-    } = req.body || {};
-
-    console.log(`[PUT QC Check] Updating ID: ${id}`, req.body);
-
-    await client.query("BEGIN");
-
-    // Check if exists
-    const checkQuery = `
-      SELECT id FROM qc_checks WHERE id = $1 AND is_active = true
-    `;
-    const checkResult = await client.query(checkQuery, [id]);
-
-    if (checkResult.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({
-        success: false,
-        message: "QC Check not found",
-      });
-    }
-
-    const updateQuery = `
-      UPDATE qc_checks
-      SET 
-        part_code = COALESCE($1, part_code),
-        part_name = COALESCE($2, part_name),
-        vendor_name = COALESCE($3, vendor_name),
-        vendor_id = COALESCE($4, vendor_id),
-        vendor_type = COALESCE($5, vendor_type),
-        production_date = COALESCE($6::date, production_date),
-        status = COALESCE($7, status),
-        remark = COALESCE($8, remark),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $9
-      RETURNING 
-        id,
-        part_code,
-        part_name,
-        vendor_name,
-        vendor_id,
-        vendor_type,
-        TO_CHAR(production_date, 'YYYY-MM-DD') as production_date,
-        approved_by,
-        approved_by_name,
-        approved_at,
-        data_from,
-        local_schedule_part_id,
-        created_by,
-        status,
-        remark,
-        updated_at
-    `;
-
-    const values = [
-      part_code,
-      part_name,
-      vendor_name,
-      vendor_id,
-      vendor_type,
-      production_date,
-      status,
-      remark,
-      id,
-    ];
-
-    const result = await client.query(updateQuery, values);
-
-    await client.query("COMMIT");
-
-    console.log(`[PUT QC Check] Successfully updated ID: ${id}`);
-
-    res.json({
-      success: true,
-      message: "QC Check updated successfully",
-      data: result.rows[0],
-    });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("[PUT QC Check] Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to update QC check",
-      error: error.message,
-    });
-  } finally {
-    client.release();
   }
 });
 

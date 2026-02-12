@@ -571,7 +571,6 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// GET /api/kanban-master/qty-per-box?part_code=XXXX
 router.get("/qty-per-box", async (req, res) => {
   try {
     const { part_code } = req.query;
@@ -580,6 +579,7 @@ router.get("/qty-per-box", async (req, res) => {
       return res.status(400).json({ message: "part_code is required" });
     }
 
+    // PERBAIKI QUERY INI - ada koma yang tidak perlu atau salah struktur
     const query = `
       SELECT 
         km.id,
@@ -588,7 +588,7 @@ router.get("/qty-per-box", async (req, res) => {
         km.qty_per_box,
         km.placement_id,
         km.unit,
-        km.vendor_id,
+        km.vendor_id,  -- TAMBAHKAN INI
         km.size_id,
         ps.size_name,
         vp.length_cm,
@@ -600,8 +600,8 @@ router.get("/qty-per-box", async (req, res) => {
       WHERE km.part_code = $1
         AND km.is_active = TRUE
       ORDER BY km.id DESC
-      LIMIT 1;
-    `;
+      LIMIT 1
+    `;  // Hapus titik koma di akhir query jika ada
 
     const { rows } = await pool.query(query, [part_code]);
 
@@ -615,7 +615,7 @@ router.get("/qty-per-box", async (req, res) => {
 
     return res.json({ 
       success: true,
-      item: rows[0] 
+      item: rows[0]
     });
   } catch (err) {
     console.error("Error /api/kanban-master/qty-per-box:", err);
