@@ -49,7 +49,7 @@ router.get("/overview", async (req, res) => {
         vd.vendor_code,
         COALESCE(km.stock_m101, 0) as stock_m101,
         COALESCE(km.stock_m136, 0) as stock_m136,
-        COALESCE(km.stock_m1y2, 0) as stock_m1y2,
+        COALESCE(km.stock_off_system, 0) as stock_off_system,
         COALESCE(km.stock_rtv, 0) as stock_rtv,
         COALESCE(km.stock_hold, 0) as stock_hold,
         COALESCE(km.monthly_scrap, 0) as monthly_scrap,
@@ -221,7 +221,7 @@ router.post("/add-stock", async (req, res) => {
     }
 
     // Validasi stock_level
-    const validStockLevels = ["M101", "M136", "M1Y2", "RTV"];
+    const validStockLevels = ["M101", "M136", "Off System", "RTV"];
     if (!validStockLevels.includes(stock_level.toUpperCase())) {
       return res.status(400).json({
         success: false,
@@ -233,7 +233,7 @@ router.post("/add-stock", async (req, res) => {
 
     // Get part info from kanban_master
     const partResult = await client.query(
-      `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_m1y2, stock_rtv
+      `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv
        FROM kanban_master 
        WHERE part_code = $1 AND is_active = true
        LIMIT 1`,
@@ -255,7 +255,7 @@ router.post("/add-stock", async (req, res) => {
       const stockLevelUpper = stock_level.toUpperCase();
       if (stockLevelUpper === "M101") quantityBefore = part.stock_m101 || 0;
       else if (stockLevelUpper === "M136") quantityBefore = part.stock_m136 || 0;
-      else if (stockLevelUpper === "M1Y2") quantityBefore = part.stock_m1y2 || 0;
+      else if (stockLevelUpper === "OFF SYSTEM") quantityBefore = part.stock_off_system || 0;
       else if (stockLevelUpper === "RTV") quantityBefore = part.stock_rtv || 0;
     }
 
@@ -300,7 +300,7 @@ router.post("/add-stock", async (req, res) => {
       const stockLevelUpper = stock_level.toUpperCase();
       let updateColumn = "stock_m101";
       if (stockLevelUpper === "M136") updateColumn = "stock_m136";
-      else if (stockLevelUpper === "M1Y2") updateColumn = "stock_m1y2";
+      else if (stockLevelUpper === "OFF SYSTEM") updateColumn = "stock_off_system";
       else if (stockLevelUpper === "RTV") updateColumn = "stock_rtv";
 
       await client.query(
@@ -386,7 +386,7 @@ router.post("/add-stock-bulk", async (req, res) => {
 
         // Get part info
         const partResult = await client.query(
-          `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_m1y2, stock_rtv
+          `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv
            FROM kanban_master 
            WHERE part_code = $1 AND is_active = true
            LIMIT 1`,
@@ -407,7 +407,7 @@ router.post("/add-stock-bulk", async (req, res) => {
           const stockLevelUpper = stock_level.toUpperCase();
           if (stockLevelUpper === "M101") quantityBefore = part.stock_m101 || 0;
           else if (stockLevelUpper === "M136") quantityBefore = part.stock_m136 || 0;
-          else if (stockLevelUpper === "M1Y2") quantityBefore = part.stock_m1y2 || 0;
+          else if (stockLevelUpper === "OFF SYSTEM") quantityBefore = part.stock_off_system || 0;
           else if (stockLevelUpper === "RTV") quantityBefore = part.stock_rtv || 0;
         }
 
@@ -447,7 +447,7 @@ router.post("/add-stock-bulk", async (req, res) => {
           const stockLevelUpper = stock_level.toUpperCase();
           let updateColumn = "stock_m101";
           if (stockLevelUpper === "M136") updateColumn = "stock_m136";
-          else if (stockLevelUpper === "M1Y2") updateColumn = "stock_m1y2";
+          else if (stockLevelUpper === "OFF SYSTEM") updateColumn = "stock_off_system";
           else if (stockLevelUpper === "RTV") updateColumn = "stock_rtv";
 
           await client.query(
@@ -530,7 +530,7 @@ router.post("/reduce-stock", async (req, res) => {
 
     // Get part info
     const partResult = await client.query(
-      `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_m1y2, stock_rtv
+      `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv
        FROM kanban_master 
        WHERE part_code = $1 AND is_active = true
        LIMIT 1`,
@@ -551,7 +551,7 @@ router.post("/reduce-stock", async (req, res) => {
       const stockLevelUpper = stock_level.toUpperCase();
       if (stockLevelUpper === "M101") quantityBefore = part.stock_m101 || 0;
       else if (stockLevelUpper === "M136") quantityBefore = part.stock_m136 || 0;
-      else if (stockLevelUpper === "M1Y2") quantityBefore = part.stock_m1y2 || 0;
+      else if (stockLevelUpper === "OFF SYSTEM") quantityBefore = part.stock_off_system || 0;
       else if (stockLevelUpper === "RTV") quantityBefore = part.stock_rtv || 0;
     }
 
@@ -603,7 +603,7 @@ router.post("/reduce-stock", async (req, res) => {
       const stockLevelUpper = stock_level.toUpperCase();
       let updateColumn = "stock_m101";
       if (stockLevelUpper === "M136") updateColumn = "stock_m136";
-      else if (stockLevelUpper === "M1Y2") updateColumn = "stock_m1y2";
+      else if (stockLevelUpper === "OFF SYSTEM") updateColumn = "stock_off_system";
       else if (stockLevelUpper === "RTV") updateColumn = "stock_rtv";
 
       await client.query(
@@ -653,9 +653,9 @@ router.get("/summary", async (req, res) => {
         vd.vendor_name,
         COALESCE(km.stock_m101, 0) as stock_m101,
         COALESCE(km.stock_m136, 0) as stock_m136,
-        COALESCE(km.stock_m1y2, 0) as stock_m1y2,
+        COALESCE(km.stock_off_system, 0) as stock_off_system,
         COALESCE(km.stock_rtv, 0) as stock_rtv,
-        (COALESCE(km.stock_m101, 0) + COALESCE(km.stock_m136, 0) + COALESCE(km.stock_m1y2, 0)) as total_stock,
+        (COALESCE(km.stock_m101, 0) + COALESCE(km.stock_m136, 0) + COALESCE(km.stock_off_system, 0)) as total_stock,
         km.unit
       FROM kanban_master km
       LEFT JOIN vendor_detail vd ON vd.id = km.vendor_id
@@ -672,7 +672,7 @@ router.get("/summary", async (req, res) => {
     }
 
     // Only show parts with stock
-    query += ` AND (COALESCE(km.stock_m101, 0) > 0 OR COALESCE(km.stock_m136, 0) > 0 OR COALESCE(km.stock_m1y2, 0) > 0 OR COALESCE(km.stock_rtv, 0) > 0)`;
+    query += ` AND (COALESCE(km.stock_m101, 0) > 0 OR COALESCE(km.stock_m136, 0) > 0 OR COALESCE(km.stock_off_system, 0) > 0 OR COALESCE(km.stock_rtv, 0) > 0)`;
 
     query += ` ORDER BY km.part_code ASC`;
     query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
