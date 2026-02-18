@@ -418,13 +418,6 @@ const updateScheduleTotals = async (client, scheduleId) => {
   }
 };
 
-// ==================== END OPTIMIZED TOTALS UPDATE FUNCTIONS ====================
-
-// ==================== END PALLET CALCULATION FUNCTIONS ====================
-
-// ==================== QC CHECKS AUTO-CREATE FUNCTIONS ====================
-
-// Create QC checks for SAMPLE production dates
 const createQCChecksForSampleDates = async (client, vendorId, vendorName, createdByName) => {
   try {
     console.log(`[createQCChecksForSampleDates] Creating QC checks for vendor ${vendorId}`);
@@ -2500,7 +2493,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
       await client.query(
         `UPDATE oversea_schedule_vendors 
-         SET vendor_status = 'Pass', updated_at = CURRENT_TIMESTAMP 
+         SET vendor_status = 'Sample', updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true`,
         [vendorId]
       );
@@ -2517,7 +2510,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       if (parseInt(totalVendors) > 0 && parseInt(totalVendors) === parseInt(pass_count)) {
         await client.query(
           `UPDATE oversea_schedules 
-           SET status = 'Pass', updated_at = CURRENT_TIMESTAMP 
+           SET status = 'Sample', updated_at = CURRENT_TIMESTAMP 
            WHERE id = $1 AND is_active = true`,
           [scheduleId]
         );
@@ -2525,6 +2518,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       }
     }
 
+    // ==================== PERBAIKAN UTAMA ====================
     const today = new Date();
     const yy = String(today.getFullYear()).slice(-2);
     const mm = String(today.getMonth() + 1).padStart(2, '0');
@@ -2538,7 +2532,6 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       // Pastikan part.kanban_master_id ada
       let partId = part.kanban_master_id;
       if (!partId) {
-        // Cari part_id dari kanban_master berdasarkan part_code
         const partIdRes = await client.query(
           `SELECT id FROM kanban_master WHERE part_code = $1 AND is_active = true LIMIT 1`,
           [part.part_code]
@@ -2551,35 +2544,43 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         }
       }
 
-      // Hitung qty per box (gunakan dari master jika ada)
-      let qtyPerBox = 1;
-      if (part.quantity && qtyBox) {
-        qtyPerBox = Math.ceil(part.quantity / qtyBox); // fallback
-      }
+      // Ambil qty_per_box dari master
+      let qtyPerBoxMaster = 1;
       const masterRes = await client.query(
         `SELECT qty_per_box FROM kanban_master WHERE id = $1`,
         [partId]
       );
       if (masterRes.rowCount > 0 && masterRes.rows[0].qty_per_box > 0) {
-        qtyPerBox = masterRes.rows[0].qty_per_box;
+        qtyPerBoxMaster = masterRes.rows[0].qty_per_box;
       }
 
-      // Dapatkan urutan terakhir untuk part ini pada tanggal yang sama
-      const pattern = datePrefix + partId + '%';
+      // Dapatkan urutan terakhir GLOBAL untuk part ini (tanpa filter tanggal)
       const seqRes = await client.query(
         `SELECT COALESCE(MAX(CAST(SUBSTRING(label_id, 13) AS INTEGER)), 0) as max_seq
-     FROM storage_inventory
-     WHERE part_id = $1 AND label_id LIKE $2`,
-        [partId, pattern]
+         FROM storage_inventory
+         WHERE part_id = $1`,
+        [partId]
       );
       let nextSeq = seqRes.rows[0].max_seq;
+
+      const totalQty = parseInt(part.quantity) || 0;
 
       for (let i = 1; i <= qtyBox; i++) {
         nextSeq++;
         const seqStr = String(nextSeq).padStart(6, '0');
         const labelId = datePrefix + partId + seqStr;
 
-        // UPDATED: status → status_tab, tambah status_part
+        // Tentukan qty untuk box ini
+        let boxQty;
+        if (i < qtyBox) {
+          boxQty = qtyPerBoxMaster;
+        } else {
+          // Box terakhir: sisa
+          boxQty = totalQty - (qtyPerBoxMaster * (qtyBox - 1));
+          if (boxQty < 0) boxQty = 0; // antisipasi data error
+        }
+
+        // Insert ke storage_inventory dengan stock_level = 'M136'
         await client.query(
           `INSERT INTO storage_inventory (
             label_id, part_id, part_code, part_name, qty,
@@ -2591,11 +2592,11 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
             partId,
             part.part_code,
             part.part_name,
-            qtyPerBox,
+            boxQty,
             vendor.vendor_id,
             vendor.vendor_name,
             part.model || vendor.model_name,
-            finalStockLevel,
+            'M136', // ← PERBAIKAN: stock_level selalu 'M136'
             vendor.schedule_date_ref,
             approveById,
             approveByName

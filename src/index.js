@@ -29,6 +29,7 @@ const stockInventoryRoutes = require('./routes/stockInventory');
 const overseaSchedulesRouter = require('./routes/overseaSchedules');
 const storageInventoryRouter = require("./routes/storageInventory");
 const partsEnquiryNonId = require("./routes/partsEnquiryNonId");
+const tripsRouter = require("./routes/trips");
 const formatScheduleDates = require("./middleware/dateFormatter");
 
 
@@ -80,6 +81,7 @@ app.use('/api/stock-inventory', stockInventoryRoutes);
 app.use('/api/oversea-schedules', overseaSchedulesRouter);
 app.use("/api/storage-inventory", storageInventoryRouter)
 app.use("/api/parts-enquiry-non-id", partsEnquiryNonId);
+app.use("/api/trips", tripsRouter);
 app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
 
             

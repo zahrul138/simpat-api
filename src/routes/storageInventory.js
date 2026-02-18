@@ -22,7 +22,13 @@ router.get("/", async (req, res) => {
         received_by_name,
         TO_CHAR(received_at, 'YYYY-MM-DD HH24:MI:SS') as received_at,
         status_tab,
-        status_part
+        status_part,
+        EXISTS (
+          SELECT 1 FROM parts_enquiry_non_id pe 
+          WHERE pe.storage_inventory_id = storage_inventory.id 
+            AND pe.is_active = true 
+            AND pe.status IN ('New', 'Waiting')
+        ) as is_requested
       FROM storage_inventory
       WHERE is_active = true
     `;
@@ -99,9 +105,9 @@ router.post("/move-to-m136", async (req, res) => {
 
     if (itemsQuery.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ 
-        success: false, 
-        message: "No valid items found" 
+      return res.status(400).json({
+        success: false,
+        message: "No valid items found"
       });
     }
 
@@ -117,11 +123,11 @@ router.post("/move-to-m136", async (req, res) => {
       }
     }
 
-    // Update storage_inventory status_tab to 'M136 System' and set status_part to 'OK'
     const updateResult = await client.query(
       `UPDATE storage_inventory 
        SET status_tab = 'M136 System', 
            status_part = 'OK',
+           stock_level = 'M136',
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ANY($1::int[]) AND is_active = true
        RETURNING id, part_code, qty`,
@@ -231,10 +237,10 @@ router.post("/move-to-m136", async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("[Move to M136] Error:", error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to move items",
-      error: error.message 
+      error: error.message
     });
   } finally {
     client.release();
@@ -249,16 +255,16 @@ router.put("/:id/update-m136", async (req, res) => {
     const { qty, status_part, moved_by_name } = req.body;
 
     if (!qty || !status_part) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Qty and status_part are required" 
+      return res.status(400).json({
+        success: false,
+        message: "Qty and status_part are required"
       });
     }
 
     if (!['OK', 'HOLD'].includes(status_part)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "status_part must be either 'OK' or 'HOLD'" 
+      return res.status(400).json({
+        success: false,
+        message: "status_part must be either 'OK' or 'HOLD'"
       });
     }
 
@@ -274,9 +280,9 @@ router.put("/:id/update-m136", async (req, res) => {
 
     if (currentItem.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ 
-        success: false, 
-        message: "Item not found or not in M136 System" 
+      return res.status(404).json({
+        success: false,
+        message: "Item not found or not in M136 System"
       });
     }
 
@@ -306,6 +312,7 @@ router.put("/:id/update-m136", async (req, res) => {
       `UPDATE storage_inventory 
        SET qty = $1, 
            status_part = $2,
+           stock_level = 'M136',
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $3`,
       [newQty, newStatus, id]
@@ -316,7 +323,7 @@ router.put("/:id/update-m136", async (req, res) => {
        WHERE part_code = $1 AND is_active = true`,
       [partCode]
     );
-    
+
     let currentM136Stock = 0;
     let currentHoldStock = 0;
     if (stockQuery.rows.length > 0) {
@@ -326,7 +333,7 @@ router.put("/:id/update-m136", async (req, res) => {
 
     if (qtyDiff !== 0 && oldStatus === newStatus) {
       const newM136Stock = currentM136Stock + qtyDiff;
-      
+
       await client.query(
         `UPDATE kanban_master 
          SET stock_m136 = $1,
@@ -337,7 +344,7 @@ router.put("/:id/update-m136", async (req, res) => {
 
       const movementType = qtyDiff > 0 ? 'IN' : 'OUT';
       const absQty = Math.abs(qtyDiff);
-      
+
       await client.query(
         `INSERT INTO stock_movements (
           part_id, part_code, part_name, movement_type, stock_level,
@@ -359,7 +366,7 @@ router.put("/:id/update-m136", async (req, res) => {
     if (oldStatus !== newStatus && newStatus === 'HOLD') {
       const newM136Stock = Math.max(0, currentM136Stock - newQty);
       const newHoldStock = currentHoldStock + newQty;
-      
+
       await client.query(
         `UPDATE kanban_master 
          SET stock_m136 = $1,
@@ -409,7 +416,7 @@ router.put("/:id/update-m136", async (req, res) => {
     else if (oldStatus !== newStatus && newStatus === 'OK' && oldStatus === 'HOLD') {
       const newHoldStock = Math.max(0, currentHoldStock - newQty);
       const newM136Stock = currentM136Stock + newQty;
-      
+
       await client.query(
         `UPDATE kanban_master 
          SET stock_hold = $1,
@@ -466,10 +473,10 @@ router.put("/:id/update-m136", async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("[Update M136 Item] Error:", error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to update item",
-      error: error.message 
+      error: error.message
     });
   } finally {
     client.release();

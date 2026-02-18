@@ -145,13 +145,17 @@ router.get("/movements", async (req, res) => {
     const { rows } = await pool.query(query, params);
 
     // Format moved_by for display
-    const formattedRows = rows.map((row, index) => ({
-      ...row,
-      no: parseInt(offset) + index + 1,
-      moved_by_display: row.moved_by_name
-        ? `${row.moved_by_name} | ${formatDateTime(row.moved_at)}`
-        : formatDateTime(row.moved_at),
-    }));
+    // Prioritas: moved_by_name (stored) → emp_name (JOIN) → hanya tanggal
+    const formattedRows = rows.map((row, index) => {
+      const displayName = row.moved_by_name || row.emp_name || null;
+      return {
+        ...row,
+        no: parseInt(offset) + index + 1,
+        moved_by_display: displayName
+          ? `${displayName} | ${formatDateTime(row.moved_at)}`
+          : formatDateTime(row.moved_at),
+      };
+    });
 
     // Get total count
     let countQuery = `
