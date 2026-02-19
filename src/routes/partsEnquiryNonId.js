@@ -400,27 +400,113 @@ router.post("/approve", async (req, res) => {
   }
 });
 
-
 // POST /api/parts-enquiry-non-id/move-to-intransit
 router.post("/move-to-intransit", async (req, res) => {
   try {
     const { ids } = req.body;
-
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ success: false, message: "No items selected" });
     }
-
     await pool.query(
       `UPDATE parts_enquiry_non_id 
        SET status = 'InTransit', updated_at = CURRENT_TIMESTAMP 
        WHERE id = ANY($1::int[]) AND status = 'Received' AND is_active = true`,
       [ids]
     );
-
     res.json({ success: true, message: `${ids.length} items moved to InTransit` });
   } catch (error) {
     console.error("[Move to InTransit] Error:", error);
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// POST /api/parts-enquiry-non-id/trigger-arrived
+// Dipanggil oleh arrivedScheduler — pindahkan InTransit → Arrived jika jam >= arv_to
+router.post("/trigger-arrived", async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT pe.id
+      FROM parts_enquiry_non_id pe
+      JOIN trips t ON LOWER(t.trip_code) = LOWER(pe.trip)
+      WHERE pe.status = 'InTransit'
+        AND pe.is_active = true
+        AND t.is_active = true
+        AND CURRENT_TIME >= t.arv_to
+    `);
+    if (rows.length === 0) {
+      return res.json({ success: true, message: "No items to move", moved: 0 });
+    }
+    const ids = rows.map((r) => r.id);
+    await pool.query(
+      `UPDATE parts_enquiry_non_id 
+       SET status = 'Arrived', updated_at = CURRENT_TIMESTAMP 
+       WHERE id = ANY($1::int[])`,
+      [ids]
+    );
+    console.log(`[Scheduler] Moved ${ids.length} item(s) to Arrived`);
+    res.json({ success: true, message: `${ids.length} items moved to Arrived`, moved: ids.length });
+  } catch (error) {
+    console.error("[Trigger Arrived] Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// POST /api/parts-enquiry-non-id/move-to-complete
+// Setelah item masuk Complete, cek jumlah total Complete.
+// Jika >= 50 row, semua item Complete otomatis dipindah ke History.
+router.post("/move-to-complete", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: "No items selected" });
+    }
+
+    await client.query("BEGIN");
+
+    // 1. Pindahkan item yang dipilih ke Complete
+    await client.query(
+      `UPDATE parts_enquiry_non_id 
+       SET status = 'Complete', updated_at = CURRENT_TIMESTAMP 
+       WHERE id = ANY($1::int[]) AND status = 'Arrived' AND is_active = true`,
+      [ids]
+    );
+
+    // 2. Cek total row di Complete setelah update
+    const countResult = await client.query(
+      `SELECT COUNT(*) as total 
+       FROM parts_enquiry_non_id 
+       WHERE status = 'Complete' AND is_active = true`
+    );
+    const totalComplete = parseInt(countResult.rows[0].total);
+
+    let autoMoved = 0;
+
+    // 3. Jika >= 50, pindahkan SEMUA Complete ke History
+    if (totalComplete >= 50) {
+      const moveResult = await client.query(
+        `UPDATE parts_enquiry_non_id 
+         SET status = 'History', updated_at = CURRENT_TIMESTAMP 
+         WHERE status = 'Complete' AND is_active = true
+         RETURNING id`
+      );
+      autoMoved = moveResult.rowCount;
+      console.log(`[Auto-History] Complete tab reached ${totalComplete} rows — moved ${autoMoved} items to History`);
+    }
+
+    await client.query("COMMIT");
+
+    const message = autoMoved > 0
+      ? `${ids.length} items moved to Complete. Tab Complete penuh (${totalComplete} rows) — ${autoMoved} items otomatis dipindah ke History.`
+      : `${ids.length} items moved to Complete`;
+
+    res.json({ success: true, message, autoMoved });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[Move to Complete] Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
   }
 });
 

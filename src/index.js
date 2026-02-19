@@ -31,6 +31,7 @@ const storageInventoryRouter = require("./routes/storageInventory");
 const partsEnquiryNonId = require("./routes/partsEnquiryNonId");
 const tripsRouter = require("./routes/trips");
 const formatScheduleDates = require("./middleware/dateFormatter");
+const { startArrivedScheduler } = require("./schedulers/arrivedScheduler");
 
 
 // ====== App setup ======
@@ -107,4 +108,5 @@ app.use((err, req, res, next) => {
 const port = process.env.PORT || 5000;
 app.listen(port, () => {
   console.log(`🚀 API running on http://localhost:${port}`);
+  startArrivedScheduler();
 });
