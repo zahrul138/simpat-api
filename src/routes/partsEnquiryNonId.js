@@ -22,9 +22,18 @@ router.get("/", async (req, res) => {
         pe.requested_by,
         TO_CHAR(pe.requested_at, 'YYYY/MM/DD HH24:MI') as requested_at,
         pe.created_at,
-        e.emp_name as requested_by_name
+        e.emp_name as requested_by_name,
+        ea.emp_name as approved_by_name,
+        TO_CHAR(pe.approved_at, 'YYYY/MM/DD HH24:MI') as approved_at,
+        ei.emp_name as intransit_by_name,
+        TO_CHAR(pe.intransit_at, 'YYYY/MM/DD HH24:MI') as intransit_at,
+        ec.emp_name as complete_by_name,
+        TO_CHAR(pe.complete_at, 'YYYY/MM/DD HH24:MI') as complete_at
       FROM parts_enquiry_non_id pe
-      LEFT JOIN employees e ON e.id = pe.requested_by
+      LEFT JOIN employees e  ON e.id  = pe.requested_by
+      LEFT JOIN employees ea ON ea.id = pe.approved_by
+      LEFT JOIN employees ei ON ei.id = pe.intransit_by
+      LEFT JOIN employees ec ON ec.id = pe.complete_by
       WHERE pe.is_active = true
     `;
 
@@ -171,6 +180,54 @@ router.post("/move-to-waiting", async (req, res) => {
   }
 });
 
+// POST /api/parts-enquiry-non-id/move-to-rejected
+router.post("/move-to-rejected", async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ success: false, message: "No id provided" });
+    }
+    const result = await pool.query(
+      `UPDATE parts_enquiry_non_id
+       SET status = 'Rejected', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND status = 'Waiting' AND is_active = true
+       RETURNING id`,
+      [id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: "Item not found or not in Waiting status" });
+    }
+    res.json({ success: true, message: "Part moved to Rejected" });
+  } catch (error) {
+    console.error("[Move to Rejected] Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// POST /api/parts-enquiry-non-id/restore-to-waiting
+router.post("/restore-to-waiting", async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ success: false, message: "No id provided" });
+    }
+    const result = await pool.query(
+      `UPDATE parts_enquiry_non_id
+       SET status = 'Waiting', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND status = 'Rejected' AND is_active = true
+       RETURNING id`,
+      [id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: "Item not found or not in Rejected status" });
+    }
+    res.json({ success: true, message: "Part restored to Waiting" });
+  } catch (error) {
+    console.error("[Restore to Waiting] Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // DELETE /api/parts-enquiry-non-id/:id
 router.delete("/:id", async (req, res) => {
   const client = await pool.connect();
@@ -194,11 +251,11 @@ router.delete("/:id", async (req, res) => {
     const { status } = partQuery.rows[0];
 
     // Hanya boleh hapus jika status New atau Waiting (sesuai aturan bisnis)
-    if (!['New', 'Waiting'].includes(status)) {
+    if (!['New', 'Rejected'].includes(status)) {
       await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
-        message: "Cannot delete item with status other than New/Waiting"
+        message: "Cannot delete item with status other than New/Rejected"
       });
     }
 
@@ -236,13 +293,22 @@ router.delete("/:id", async (req, res) => {
 router.post("/approve", async (req, res) => {
   const client = await pool.connect();
   try {
-    const { ids } = req.body;
+    const { ids, approved_by_name } = req.body;
 
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ success: false, message: "No items selected" });
     }
 
     await client.query("BEGIN");
+
+    let approvedById = null;
+    if (approved_by_name) {
+      const empResult = await client.query(
+        `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
+        [approved_by_name]
+      );
+      if (empResult.rowCount > 0) approvedById = empResult.rows[0].id;
+    }
 
     // Ambil data parts yang akan di-approve (status harus 'Waiting')
     const partsQuery = await client.query(
@@ -277,9 +343,12 @@ router.post("/approve", async (req, res) => {
       if (storage_inventory_id) {
         await client.query(
           `UPDATE storage_inventory 
-           SET status_tab = 'OutSystem', updated_at = CURRENT_TIMESTAMP
+           SET status_tab = 'OutSystem',
+               moved_by_name = $2,
+               moved_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
            WHERE id = $1 AND is_active = true`,
-          [storage_inventory_id]
+          [storage_inventory_id, approved_by_name || null]
         );
       }
 
@@ -343,8 +412,8 @@ router.post("/approve", async (req, res) => {
           'Parts Enquiry Non ID Approved',
           model,
           `${qty} PCS moved from M136 to M101`,
-          requested_by,
-          null // bisa diisi nama jika ada di tabel parts_enquiry_non_id
+          approvedById,
+          approved_by_name || null
         ]
       );
 
@@ -368,8 +437,8 @@ router.post("/approve", async (req, res) => {
           'Parts Enquiry Non ID Approved',
           model,
           `${qty} PCS received from M136`,
-          requested_by,
-          null
+          approvedById,
+          approved_by_name || null
         ]
       );
 
@@ -379,9 +448,9 @@ router.post("/approve", async (req, res) => {
     // 5. Update status parts_enquiry_non_id menjadi 'Received'
     await client.query(
       `UPDATE parts_enquiry_non_id 
-       SET status = 'Received', updated_at = CURRENT_TIMESTAMP 
+       SET status = 'Received', approved_by = $2, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ANY($1::int[]) AND status = 'Waiting' AND is_active = true`,
-      [ids]
+      [ids, approvedById]
     );
 
     await client.query("COMMIT");
@@ -402,21 +471,39 @@ router.post("/approve", async (req, res) => {
 
 // POST /api/parts-enquiry-non-id/move-to-intransit
 router.post("/move-to-intransit", async (req, res) => {
+  const client = await pool.connect();
   try {
-    const { ids } = req.body;
+    const { ids, intransit_by_name } = req.body;
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ success: false, message: "No items selected" });
     }
-    await pool.query(
+
+    await client.query("BEGIN");
+
+    let intransitById = null;
+    if (intransit_by_name) {
+      const empResult = await client.query(
+        `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
+        [intransit_by_name]
+      );
+      if (empResult.rowCount > 0) intransitById = empResult.rows[0].id;
+    }
+
+    await client.query(
       `UPDATE parts_enquiry_non_id 
-       SET status = 'InTransit', updated_at = CURRENT_TIMESTAMP 
+       SET status = 'InTransit', intransit_by = $2, intransit_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ANY($1::int[]) AND status = 'Received' AND is_active = true`,
-      [ids]
+      [ids, intransitById]
     );
+
+    await client.query("COMMIT");
     res.json({ success: true, message: `${ids.length} items moved to InTransit` });
   } catch (error) {
+    await client.query("ROLLBACK");
     console.error("[Move to InTransit] Error:", error);
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -464,12 +551,22 @@ router.post("/move-to-complete", async (req, res) => {
 
     await client.query("BEGIN");
 
+    const { complete_by_name } = req.body;
+    let completeById = null;
+    if (complete_by_name) {
+      const empResult = await client.query(
+        `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
+        [complete_by_name]
+      );
+      if (empResult.rowCount > 0) completeById = empResult.rows[0].id;
+    }
+
     // 1. Pindahkan item yang dipilih ke Complete
     await client.query(
       `UPDATE parts_enquiry_non_id 
-       SET status = 'Complete', updated_at = CURRENT_TIMESTAMP 
+       SET status = 'Complete', complete_by = $2, complete_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ANY($1::int[]) AND status = 'Arrived' AND is_active = true`,
-      [ids]
+      [ids, completeById]
     );
 
     // 2. Cek total row di Complete setelah update

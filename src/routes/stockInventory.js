@@ -115,6 +115,7 @@ router.get("/movements", async (req, res) => {
         sm.source_reference,
         sm.model,
         TO_CHAR(sm.production_date, 'YYYY-MM-DD') as production_date,
+        sm.production_dates,
         sm.remark,
         sm.moved_by,
         sm.moved_by_name,
@@ -210,6 +211,7 @@ router.post("/add-stock", async (req, res) => {
       source_reference, // DO number or other reference
       model,
       production_date,
+      production_dates,
       remark,
       moved_by_name,
     } = req.body;
@@ -274,9 +276,9 @@ router.post("/add-stock", async (req, res) => {
         part_id, part_code, part_name, movement_type, stock_level,
         quantity, quantity_before, quantity_after,
         source_type, source_id, source_reference,
-        model, production_date, remark,
+        model, production_date, production_dates, remark,
         moved_by, moved_by_name, moved_at
-      ) VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
+      ) VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
       RETURNING *`,
       [
         partId,
@@ -291,6 +293,7 @@ router.post("/add-stock", async (req, res) => {
         source_reference || null,
         finalModel || null,
         production_date || null,
+        production_dates || null,
         remark || null,
         movedById,
         moved_by_name || null,
@@ -376,6 +379,7 @@ router.post("/add-stock-bulk", async (req, res) => {
           stock_level,
           model,
           production_date,
+          production_dates,
           remark,
           source_reference,
         } = item;
@@ -423,9 +427,9 @@ router.post("/add-stock-bulk", async (req, res) => {
             part_id, part_code, part_name, movement_type, stock_level,
             quantity, quantity_before, quantity_after,
             source_type, source_id, source_reference,
-            model, production_date, remark,
+            model, production_date, production_dates, remark,
             moved_by, moved_by_name, moved_at
-          ) VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
+          ) VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
           RETURNING id`,
           [
             partId,
@@ -440,6 +444,7 @@ router.post("/add-stock-bulk", async (req, res) => {
             source_reference || null,
             finalModel || null,
             production_date || null,
+            production_dates || null,
             remark || null,
             movedById,
             moved_by_name || null,

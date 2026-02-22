@@ -246,14 +246,15 @@ router.get("/", async (req, res) => {
                 lsp.do_number,
                 lsp.remark,
                 TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
-                COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates
+                COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates,
+                COALESCE(lsp.sample_dates::jsonb, '[]'::jsonb) as sample_dates
                FROM local_schedule_parts lsp
                WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
                ORDER BY lsp.id ASC`,
               [vendor.id],
             );
 
-            // Parse prod_dates from JSON
+            // Parse prod_dates and sample_dates from JSON
             const partsWithParsedDates = partsResult.rows.map((part) => ({
               ...part,
               prod_dates:
@@ -261,6 +262,12 @@ router.get("/", async (req, res) => {
                   ? JSON.parse(part.prod_dates)
                   : Array.isArray(part.prod_dates)
                     ? part.prod_dates
+                    : [],
+              sample_dates:
+                typeof part.sample_dates === "string"
+                  ? JSON.parse(part.sample_dates)
+                  : Array.isArray(part.sample_dates)
+                    ? part.sample_dates
                     : [],
             }));
 
@@ -378,14 +385,15 @@ router.get("/received-vendors", async (req, res) => {
             lsp.do_number,
             lsp.remark,
             TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
-            COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates
+            COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates,
+            COALESCE(lsp.sample_dates::jsonb, '[]'::jsonb) as sample_dates
            FROM local_schedule_parts lsp
            WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
            ORDER BY lsp.id ASC`,
           [vendor.id],
         );
 
-        // Parse prod_dates from JSON
+        // Parse prod_dates and sample_dates from JSON
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
           prod_dates:
@@ -393,6 +401,12 @@ router.get("/received-vendors", async (req, res) => {
               ? JSON.parse(part.prod_dates)
               : Array.isArray(part.prod_dates)
                 ? part.prod_dates
+                : [],
+          sample_dates:
+            typeof part.sample_dates === "string"
+              ? JSON.parse(part.sample_dates)
+              : Array.isArray(part.sample_dates)
+                ? part.sample_dates
                 : [],
         }));
 
@@ -476,14 +490,15 @@ router.get("/iqc-progress-vendors", async (req, res) => {
             lsp.remark,
             lsp.status,
             TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
-            COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates
+            COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates,
+            COALESCE(lsp.sample_dates::jsonb, '[]'::jsonb) as sample_dates
            FROM local_schedule_parts lsp
            WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
            ORDER BY lsp.id ASC`,
           [vendor.id],
         );
 
-        // Parse prod_dates from JSON
+        // Parse prod_dates and sample_dates from JSON
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
           prod_dates:
@@ -491,6 +506,12 @@ router.get("/iqc-progress-vendors", async (req, res) => {
               ? JSON.parse(part.prod_dates)
               : Array.isArray(part.prod_dates)
                 ? part.prod_dates
+                : [],
+          sample_dates:
+            typeof part.sample_dates === "string"
+              ? JSON.parse(part.sample_dates)
+              : Array.isArray(part.sample_dates)
+                ? part.sample_dates
                 : [],
         }));
 
@@ -572,14 +593,15 @@ router.get("/sample-vendors", async (req, res) => {
             lsp.remark,
             lsp.status,
             TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
-            lsp.prod_dates
+            COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates,
+            COALESCE(lsp.sample_dates::jsonb, '[]'::jsonb) as sample_dates
            FROM local_schedule_parts lsp
            WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
            ORDER BY lsp.id ASC`,
           [vendor.id],
         );
 
-        // Parse prod_dates for each part
+        // Parse prod_dates and sample_dates for each part
         const partsWithParsedDates = partsResult.rows.map((part) => {
           let parsedProdDates = [];
           if (part.prod_dates) {
@@ -590,15 +612,25 @@ router.get("/sample-vendors", async (req, res) => {
                 parsedProdDates = part.prod_dates;
               }
             } catch (e) {
-              console.error(
-                "[GET Sample Vendors] Error parsing prod_dates:",
-                e,
-              );
+              console.error("[GET Sample Vendors] Error parsing prod_dates:", e);
+            }
+          }
+          let parsedSampleDates = [];
+          if (part.sample_dates) {
+            try {
+              if (typeof part.sample_dates === "string") {
+                parsedSampleDates = JSON.parse(part.sample_dates);
+              } else if (Array.isArray(part.sample_dates)) {
+                parsedSampleDates = part.sample_dates;
+              }
+            } catch (e) {
+              console.error("[GET Sample Vendors] Error parsing sample_dates:", e);
             }
           }
           return {
             ...part,
             prod_dates: parsedProdDates,
+            sample_dates: parsedSampleDates,
           };
         });
 
@@ -678,14 +710,15 @@ router.get("/complete-vendors", async (req, res) => {
             lsp.remark,
             lsp.status,
             TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
-            lsp.prod_dates
+            COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates,
+            COALESCE(lsp.sample_dates::jsonb, '[]'::jsonb) as sample_dates
            FROM local_schedule_parts lsp
            WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
            ORDER BY lsp.id ASC`,
           [vendor.id],
         );
 
-        // Parse prod_dates for each part
+        // Parse prod_dates and sample_dates for each part
         const partsWithParsedDates = partsResult.rows.map((part) => {
           let parsedProdDates = [];
           if (part.prod_dates) {
@@ -696,15 +729,25 @@ router.get("/complete-vendors", async (req, res) => {
                 parsedProdDates = part.prod_dates;
               }
             } catch (e) {
-              console.error(
-                "[GET Complete Vendors] Error parsing prod_dates:",
-                e,
-              );
+              console.error("[GET Complete Vendors] Error parsing prod_dates:", e);
+            }
+          }
+          let parsedSampleDates = [];
+          if (part.sample_dates) {
+            try {
+              if (typeof part.sample_dates === "string") {
+                parsedSampleDates = JSON.parse(part.sample_dates);
+              } else if (Array.isArray(part.sample_dates)) {
+                parsedSampleDates = part.sample_dates;
+              }
+            } catch (e) {
+              console.error("[GET Complete Vendors] Error parsing sample_dates:", e);
             }
           }
           return {
             ...part,
             prod_dates: parsedProdDates,
+            sample_dates: parsedSampleDates,
           };
         });
 
@@ -1012,7 +1055,10 @@ router.put("/bulk/status", async (req, res) => {
 // PUT /api/local-schedules/parts/:id
 // Update untuk menerima prod_dates (array)
 router.put("/parts/:id", async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query("BEGIN");
+
     const { id } = req.params;
     const {
       part_code,
@@ -1022,8 +1068,11 @@ router.put("/parts/:id", async (req, res) => {
       unit,
       remark,
       prod_date,
-      prod_dates, // NEW: Array of dates
+      prod_dates,   // Array of dates
+      sample_dates, // Array of dates yang perlu sampling (disimpan frozen saat approve)
       status,
+      upload_by_id,  // ID dari JWT payload — update upload_by di local_schedules (Today tab)
+      approve_by_id, // ID dari JWT payload — update approve_by di local_schedule_vendors (IQC Progress tab)
     } = req.body;
 
     const updateFields = [];
@@ -1058,10 +1107,15 @@ router.put("/parts/:id", async (req, res) => {
       updateFields.push(`prod_date = $${paramIndex++}`);
       values.push(prod_date);
     }
-    // NEW: Handle prod_dates array
+    // Handle prod_dates array
     if (prod_dates !== undefined) {
       updateFields.push(`prod_dates = $${paramIndex++}`);
       values.push(JSON.stringify(prod_dates));
+    }
+    // Handle sample_dates array (frozen — disimpan saat vendor approve di Received tab)
+    if (sample_dates !== undefined) {
+      updateFields.push(`sample_dates = $${paramIndex++}`);
+      values.push(JSON.stringify(sample_dates));
     }
     if (status !== undefined) {
       updateFields.push(`status = $${paramIndex++}`);
@@ -1069,6 +1123,7 @@ router.put("/parts/:id", async (req, res) => {
     }
 
     if (updateFields.length === 0) {
+      await client.query("ROLLBACK");
       return res
         .status(400)
         .json({ success: false, message: "No fields to update" });
@@ -1082,18 +1137,68 @@ router.put("/parts/:id", async (req, res) => {
       RETURNING *
     `;
 
-    const result = await pool.query(query, values);
+    const result = await client.query(query, values);
 
     if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res
         .status(404)
         .json({ success: false, message: "Part not found" });
     }
 
+    // Update Upload By & updated_at di parent local_schedules ketika ada upload_by_id
+    if (upload_by_id) {
+      // Cari schedule_id melalui part → vendor → schedule
+      const scheduleResult = await client.query(
+        `SELECT lsv.local_schedule_id
+         FROM local_schedule_parts lsp
+         JOIN local_schedule_vendors lsv ON lsv.id = lsp.local_schedule_vendor_id
+         WHERE lsp.id = $1
+         LIMIT 1`,
+        [id],
+      );
+
+      if (scheduleResult.rows.length > 0) {
+        const scheduleId = scheduleResult.rows[0].local_schedule_id;
+        await client.query(
+          `UPDATE local_schedules
+           SET upload_by = $1, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [upload_by_id, scheduleId],
+        );
+      }
+    }
+
+    // Update Approve By & approve_at di local_schedule_vendors (IQC Progress tab)
+    // ketika ada approve_by_id — ini update kolom Approve By yang tampil di IQC Progress
+    if (approve_by_id) {
+      const vendorResult = await client.query(
+        `SELECT lsp.local_schedule_vendor_id
+         FROM local_schedule_parts lsp
+         WHERE lsp.id = $1
+         LIMIT 1`,
+        [id],
+      );
+
+      if (vendorResult.rows.length > 0) {
+        const vendorId = vendorResult.rows[0].local_schedule_vendor_id;
+        await client.query(
+          `UPDATE local_schedule_vendors
+           SET approve_by = $1, approve_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [approve_by_id, vendorId],
+        );
+      }
+    }
+
+    await client.query("COMMIT");
     res.json({ success: true, data: result.rows[0] });
   } catch (error) {
+    await client.query("ROLLBACK");
     console.error("Error updating part:", error);
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -1242,7 +1347,7 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
   }
 });
 
-// ====== APPROVE VENDOR (move from Received to IQC Progress) ======
+// ====== APPROVE VENDOR (move from Received to IQC Progress or Complete) ======
 router.put("/vendors/:vendorId/approve", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1253,7 +1358,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Cek apakah vendor exists dan ambil info schedule termasuk stock_level
+    // 1. Cek vendor dan ambil info schedule + stock_level
     const vendorCheck = await client.query(
       `SELECT 
         lsv.id, 
@@ -1261,6 +1366,8 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         lsv.vendor_status,
         lsv.vendor_id,
         lsv.do_numbers,
+        TO_CHAR(lsv.schedule_date_ref, 'YYYY-MM-DD') as schedule_date_ref,
+        lsv.stock_level_ref,
         vd.vendor_name,
         ls.model_name,
         ls.stock_level as schedule_stock_level
@@ -1273,33 +1380,27 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     if (vendorCheck.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({
-        success: false,
-        message: "Vendor not found",
-      });
+      return res.status(404).json({ success: false, message: "Vendor not found" });
     }
 
     const vendor = vendorCheck.rows[0];
     const scheduleId = vendor.local_schedule_id;
     const modelName = vendor.model_name;
-    
-    // EXTRACT stock level code dari format "M101 | SCN-MH" atau "M136 | SCN-LOG"
+
+    // EXTRACT stock level: "M101 | SCN-MH" -> "M101"
     let rawStockLevel = vendor.schedule_stock_level || "";
-    let finalStockLevel = "M101"; // default ke M101
-    
+    let finalStockLevel = "M101"; // default untuk local schedule
     console.log(`[APPROVE Vendor] Raw stock_level from DB: "${rawStockLevel}"`);
-    
     if (rawStockLevel) {
-      // Extract kode: "M101 | SCN-MH" -> "M101"
       const parts = rawStockLevel.split("|");
       if (parts.length > 0) {
         const code = parts[0].trim().toUpperCase();
-        if (code === "M101" || code === "M136" || code === "M1Y2" || code === "RTV") {
+        if (["M101", "M136", "RTV"].includes(code)) {
           finalStockLevel = code;
         }
+        // M1Y2 tidak ada di kanban_master, skip (tetap M101 default)
       }
     }
-    
     console.log(`[APPROVE Vendor] Final stock level: "${finalStockLevel}"`);
 
     // 2. Get employee ID from name
@@ -1309,12 +1410,10 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
         [approveByName]
       );
-      if (empResult.rowCount > 0) {
-        approveById = empResult.rows[0].id;
-      }
+      if (empResult.rowCount > 0) approveById = empResult.rows[0].id;
     }
 
-    // 3. Get all parts for this vendor
+    // 3. Get all parts for this vendor (termasuk prod_dates)
     const partsResult = await client.query(
       `SELECT 
         lsp.id,
@@ -1326,152 +1425,392 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         lsp.do_number,
         lsp.remark,
         TO_CHAR(lsp.prod_date, 'YYYY-MM-DD') as prod_date,
+        COALESCE(lsp.prod_dates::jsonb, '[]'::jsonb) as prod_dates,
         km.id as kanban_master_id,
-        km.model
+        km.model,
+        km.qty_per_box
        FROM local_schedule_parts lsp
        LEFT JOIN kanban_master km ON km.part_code = lsp.part_code AND km.is_active = true
-       WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true`,
+       WHERE lsp.local_schedule_vendor_id = $1 AND lsp.is_active = true
+       ORDER BY lsp.id ASC`,
       [vendorId]
     );
 
-    console.log(`[APPROVE Vendor] Found ${partsResult.rowCount} parts to add to stock`);
+    console.log(`[APPROVE Vendor] Found ${partsResult.rowCount} parts`);
 
-    // 4. Add each part to stock inventory
+    // 4. Cek prod_dates vs qc_checks Complete (untuk menentukan apakah perlu IQC atau langsung Complete)
+    const qcChecksResult = await client.query(
+      `SELECT part_code, TO_CHAR(production_date, 'YYYY-MM-DD') as production_date, status
+       FROM qc_checks
+       WHERE status = 'Complete' AND is_active = true`
+    );
+    const qcChecks = qcChecksResult.rows;
+
+    const isProductionDateComplete = (partCode, prodDate) => {
+      if (!partCode || !prodDate) return false;
+      const normalizedDate = prodDate.split("T")[0];
+      return qcChecks.some(
+        (qc) =>
+          qc.part_code === partCode &&
+          qc.production_date === normalizedDate &&
+          qc.status === "Complete"
+      );
+    };
+
+    // Cek apakah semua part sudah PASS (tidak ada incomplete prod_dates)
+    let allPartsPass = true;
+    for (const part of partsResult.rows) {
+      const prodDates = typeof part.prod_dates === "string"
+        ? JSON.parse(part.prod_dates)
+        : Array.isArray(part.prod_dates)
+          ? part.prod_dates
+          : [];
+
+      if (prodDates.length > 0) {
+        const incompleteDates = prodDates.filter(
+          (date) => !isProductionDateComplete(part.part_code, date)
+        );
+        if (incompleteDates.length > 0) {
+          allPartsPass = false;
+          break;
+        }
+      }
+      // Part tanpa prod_dates dianggap tidak perlu sampling
+    }
+    console.log(`[APPROVE Vendor] All parts PASS (no sampling needed): ${allPartsPass}`);
+
+    // 4b. Jika ada incomplete prod_dates → insert ke qc_checks dengan status 'M101 Part'
+    //     (Mirip oversea yang insert 'M136 Part') → muncul di QCCheckPage tab M101 Part
+    if (!allPartsPass) {
+      for (const part of partsResult.rows) {
+        const prodDates = typeof part.prod_dates === "string"
+          ? JSON.parse(part.prod_dates)
+          : Array.isArray(part.prod_dates)
+            ? part.prod_dates
+            : [];
+
+        if (prodDates.length === 0) continue;
+
+        const incompleteDates = prodDates.filter(
+          (date) => !isProductionDateComplete(part.part_code, date)
+        );
+
+        // Simpan sample_dates frozen ke DB agar Status & Sample column tidak berubah
+        // setelah QC approve di QCCheckPage
+        if (incompleteDates.length > 0) {
+          await client.query(
+            `UPDATE local_schedule_parts
+             SET sample_dates = $1::jsonb, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [JSON.stringify(incompleteDates), part.id]
+          );
+        }
+
+        for (const date of incompleteDates) {
+          // Cek apakah sudah ada qc_checks entry untuk part + date + vendor ini
+          // Gunakan part_code + production_date + vendor_name karena source_vendor_id = NULL
+          const existingCheck = await client.query(
+            `SELECT id, status FROM qc_checks
+             WHERE part_code = $1
+               AND production_date = $2::date
+               AND vendor_name = $3
+               AND data_from = 'M101'
+               AND is_active = true
+             LIMIT 1`,
+            [part.part_code, date, vendor.vendor_name]
+          );
+
+          if (existingCheck.rowCount > 0) {
+            // Sudah ada — update ke M101 Part jika belum Complete
+            if (existingCheck.rows[0].status !== "Complete") {
+              await client.query(
+                `UPDATE qc_checks
+                 SET status = 'M101 Part', updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $1`,
+                [existingCheck.rows[0].id]
+              );
+            }
+          } else {
+            // Belum ada — insert baru
+            // CATATAN: source_vendor_id = NULL dan source_part_id = NULL karena kedua FK
+            // references oversea_schedule_vendors / oversea_schedule_parts, bukan tabel local.
+            // Tracking M101 dilakukan via data_from='M101' + vendor_name + part_code + production_date.
+            await client.query(
+              `INSERT INTO qc_checks (
+                part_code, part_name, vendor_name, production_date,
+                data_from, status, source_vendor_id, source_part_id,
+                created_by, created_at, updated_at, is_active
+              ) VALUES ($1, $2, $3, $4::date, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true)`,
+              [
+                part.part_code,
+                part.part_name,
+                vendor.vendor_name,
+                date,
+                "M101",
+                "M101 Part",
+                null,   // source_vendor_id = NULL: FK hanya merujuk ke oversea_schedule_vendors, bukan local
+                null,   // source_part_id
+                approveByName || "System",
+              ]
+            );
+          }
+        }
+      }
+      console.log(`[APPROVE Vendor] Inserted/updated qc_checks with status 'M101 Part' for incomplete prod_dates`);
+    }
+
+    // 5. Tambahkan setiap part ke stock inventory (stock_movements + kanban_master)
     const stockResults = [];
     for (const part of partsResult.rows) {
       const qty = parseInt(part.quantity) || 0;
-      if (qty > 0) {
-        // Get current stock from kanban_master
-        let quantityBefore = 0;
-        if (part.kanban_master_id) {
-          const stockQuery = await client.query(
-            `SELECT stock_m101, stock_m136, stock_m1y2, stock_rtv 
-             FROM kanban_master WHERE id = $1`,
-            [part.kanban_master_id]
-          );
-          if (stockQuery.rows[0]) {
-            const stockRow = stockQuery.rows[0];
-            if (finalStockLevel === "M101") {
-              quantityBefore = parseInt(stockRow.stock_m101) || 0;
-            } else if (finalStockLevel === "M136") {
-              quantityBefore = parseInt(stockRow.stock_m136) || 0;
-            } else if (finalStockLevel === "M1Y2") {
-              quantityBefore = parseInt(stockRow.stock_m1y2) || 0;
-            } else if (finalStockLevel === "RTV") {
-              quantityBefore = parseInt(stockRow.stock_rtv) || 0;
-            }
-          }
-        }
+      if (qty <= 0) continue;
 
-        const quantityAfter = quantityBefore + qty;
-
-        // Insert movement record ke stock_movements
-        const movementResult = await client.query(
-          `INSERT INTO stock_movements (
-            part_id, part_code, part_name, movement_type, stock_level,
-            quantity, quantity_before, quantity_after,
-            source_type, source_id, source_reference,
-            model, production_date, remark,
-            moved_by, moved_by_name, moved_at, is_active
-          ) VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13, $14, $15, CURRENT_TIMESTAMP, true)
-          RETURNING id`,
-          [
-            part.kanban_master_id,
-            part.part_code,
-            part.part_name,
-            finalStockLevel,
-            qty,
-            quantityBefore,
-            quantityAfter,
-            "local_schedule",
-            vendorId,
-            part.do_number || vendor.do_numbers,
-            part.model || modelName,
-            part.prod_date || null,
-            part.remark || `Approved from vendor: ${vendor.vendor_name || 'Unknown'}`,
-            approveById,
-            approveByName || null,
-          ]
+      let quantityBefore = 0;
+      if (part.kanban_master_id) {
+        // FIX: Hanya select kolom yang benar-benar ada (hapus stock_m1y2)
+        const stockQuery = await client.query(
+          `SELECT stock_m101, stock_m136, stock_off_system, stock_rtv 
+           FROM kanban_master WHERE id = $1`,
+          [part.kanban_master_id]
         );
-
-        console.log(`[APPROVE Vendor] Inserted movement for ${part.part_code}, ID: ${movementResult.rows[0].id}`);
-
-        // Update kanban_master stock if part exists in master
-        if (part.kanban_master_id) {
-          let updateColumn = "stock_m101";
-          if (finalStockLevel === "M136") updateColumn = "stock_m136";
-          else if (finalStockLevel === "M1Y2") updateColumn = "stock_m1y2";
-          else if (finalStockLevel === "RTV") updateColumn = "stock_rtv";
-
-          await client.query(
-            `UPDATE kanban_master 
-             SET ${updateColumn} = $1, updated_at = CURRENT_TIMESTAMP 
-             WHERE id = $2`,
-            [quantityAfter, part.kanban_master_id]
-          );
-          
-          console.log(`[APPROVE Vendor] Updated kanban_master.${updateColumn} for ${part.part_code}: ${quantityBefore} -> ${quantityAfter}`);
+        if (stockQuery.rows[0]) {
+          const sr = stockQuery.rows[0];
+          if (finalStockLevel === "M101")       quantityBefore = parseInt(sr.stock_m101) || 0;
+          else if (finalStockLevel === "M136")  quantityBefore = parseInt(sr.stock_m136) || 0;
+          else if (finalStockLevel === "RTV")   quantityBefore = parseInt(sr.stock_rtv) || 0;
         }
-
-        stockResults.push({
-          part_code: part.part_code,
-          movement_id: movementResult.rows[0].id,
-          quantity_added: qty,
-          stock_before: quantityBefore,
-          stock_after: quantityAfter,
-        });
       }
-    }
 
+      const quantityAfter = quantityBefore + qty;
+
+      // Insert ke stock_movements (muncul sebagai arrow hijau di StockOverviewPage tab M101)
+      // Gabungkan semua prod_dates menjadi comma-separated text (DD/MM/YYYY, DD/MM/YYYY, ...)
+      const rawProdDates = typeof part.prod_dates === "string"
+        ? JSON.parse(part.prod_dates)
+        : Array.isArray(part.prod_dates) ? part.prod_dates : [];
+      const productionDatesText = rawProdDates.length > 0
+        ? rawProdDates.map((d) => {
+            const [y, m, day] = String(d).split("T")[0].split("-");
+            return `${day}/${m}/${y}`;
+          }).join(", ")
+        : (part.prod_date
+            ? (() => { const [y, m, day] = part.prod_date.split("-"); return `${day}/${m}/${y}`; })()
+            : null);
+
+      const movementResult = await client.query(
+        `INSERT INTO stock_movements (
+          part_id, part_code, part_name, movement_type, stock_level,
+          quantity, quantity_before, quantity_after,
+          source_type, source_id, source_reference,
+          model, production_date, production_dates, remark,
+          moved_by, moved_by_name, moved_at, is_active
+        ) VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13, $14, $15, $16, CURRENT_TIMESTAMP, true)
+        RETURNING id`,
+        [
+          part.kanban_master_id,
+          part.part_code,
+          part.part_name,
+          finalStockLevel,
+          qty,
+          quantityBefore,
+          quantityAfter,
+          "local_schedule",
+          vendorId,
+          part.do_number || vendor.do_numbers,
+          part.model || modelName,
+          part.prod_date || null,
+          productionDatesText,
+          part.remark || `Approved from vendor: ${vendor.vendor_name || "Unknown"}`,
+          approveById,
+          approveByName || null,
+        ]
+      );
+      console.log(`[APPROVE Vendor] Inserted stock movement for ${part.part_code}, movement_id: ${movementResult.rows[0].id}`);
+
+      // Update kanban_master stock
+      if (part.kanban_master_id) {
+        // FIX: Tidak ada kolom stock_m1y2, gunakan stock_off_system sebagai fallback
+        let updateColumn = "stock_m101";
+        if (finalStockLevel === "M136")     updateColumn = "stock_m136";
+        else if (finalStockLevel === "RTV") updateColumn = "stock_rtv";
+
+        await client.query(
+          `UPDATE kanban_master SET ${updateColumn} = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          [quantityAfter, part.kanban_master_id]
+        );
+        console.log(`[APPROVE Vendor] Updated kanban_master.${updateColumn} for ${part.part_code}: ${quantityBefore} -> ${quantityAfter}`);
+      }
+
+      stockResults.push({
+        part_code: part.part_code,
+        movement_id: movementResult.rows[0].id,
+        quantity_added: qty,
+        stock_before: quantityBefore,
+        stock_after: quantityAfter,
+      });
+    }
     console.log(`[APPROVE Vendor] Added ${stockResults.length} parts to ${finalStockLevel} stock`);
 
-    // 5. Update vendor status to IQC Progress
-    const vendorResult = await client.query(
-      `UPDATE local_schedule_vendors 
-       SET vendor_status = 'IQC Progress', 
-           approve_by = $2,
-           approve_at = CURRENT_TIMESTAMP,
-           updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $1 AND is_active = true 
-       RETURNING id, local_schedule_id, vendor_status, approve_by, approve_at`,
-      [vendorId, approveById]
-    );
+    // 6. Insert ke storage_inventory untuk M101 (mirip oversea yang insert untuk M136)
+    const today = new Date();
+    const yy = String(today.getFullYear()).slice(-2);
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    const datePrefix = yy + mm + dd;
 
-    console.log(`[APPROVE Vendor] Vendor status updated to IQC Progress`);
+    for (const part of partsResult.rows) {
+      const qtyBox = parseInt(part.quantity_box) || 0;
+      if (qtyBox <= 0) continue;
 
-    // 6. Cek apakah semua vendor di schedule sudah IQC Progress
-    const allVendorsCheck = await client.query(
-      `SELECT COUNT(*) as total, 
-              SUM(CASE WHEN vendor_status = 'IQC Progress' THEN 1 ELSE 0 END) as matched_count
-       FROM local_schedule_vendors 
-       WHERE local_schedule_id = $1 AND is_active = true`,
-      [scheduleId]
-    );
+      let partId = part.kanban_master_id;
+      if (!partId) {
+        const partIdRes = await client.query(
+          `SELECT id FROM kanban_master WHERE part_code = $1 AND is_active = true LIMIT 1`,
+          [part.part_code]
+        );
+        if (partIdRes.rowCount > 0) {
+          partId = partIdRes.rows[0].id;
+        } else {
+          console.warn(`[APPROVE Vendor] No kanban_master_id for part ${part.part_code}, skipping storage inventory`);
+          continue;
+        }
+      }
 
-    const { total, matched_count } = allVendorsCheck.rows[0];
+      // Ambil qty_per_box dari master
+      let qtyPerBoxMaster = part.qty_per_box || 1;
+      if (qtyPerBoxMaster <= 0) qtyPerBoxMaster = 1;
 
-    // 7. Jika semua vendor sudah IQC Progress, update schedule status
-    if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
-      await client.query(
-        `UPDATE local_schedules 
-         SET status = 'IQC Progress', updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $1 AND is_active = true`,
+      // Dapatkan urutan label terakhir untuk part ini
+      const seqRes = await client.query(
+        `SELECT COALESCE(MAX(CAST(SUBSTRING(label_id, 13) AS INTEGER)), 0) as max_seq
+         FROM storage_inventory WHERE part_id = $1`,
+        [partId]
+      );
+      let nextSeq = seqRes.rows[0].max_seq;
+
+      const totalQty = parseInt(part.quantity) || 0;
+
+      for (let i = 1; i <= qtyBox; i++) {
+        nextSeq++;
+        const seqStr = String(nextSeq).padStart(6, "0");
+        const labelId = datePrefix + partId + seqStr;
+
+        let boxQty;
+        if (i < qtyBox) {
+          boxQty = qtyPerBoxMaster;
+        } else {
+          boxQty = totalQty - qtyPerBoxMaster * (qtyBox - 1);
+          if (boxQty < 0) boxQty = 0;
+        }
+
+        await client.query(
+          `INSERT INTO storage_inventory (
+            label_id, part_id, part_code, part_name, qty,
+            vendor_id, vendor_name, model, stock_level, schedule_date,
+            received_by, received_by_name, received_at, status_tab, status_part
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP, 'M101', 'OK')`,
+          [
+            labelId,
+            partId,
+            part.part_code,
+            part.part_name,
+            boxQty,
+            vendor.vendor_id,
+            vendor.vendor_name,
+            part.model || modelName,
+            "M101",
+            vendor.schedule_date_ref,
+            approveById,
+            approveByName,
+          ]
+        );
+      }
+    }
+    console.log(`[APPROVE Vendor] Storage inventory records inserted for M101`);
+
+    // 7. Tentukan status vendor: Sample (Pass tab) jika semua PASS, IQC Progress jika ada sample
+    //    allPartsPass=true  → tab Pass  (vendor_status='Sample')
+    //    allPartsPass=false → tab IQC Progress → QCCheckPage M101 Part → auto-move ke Pass
+    const newVendorStatus = allPartsPass ? "Sample" : "IQC Progress";
+    console.log(`[APPROVE Vendor] Setting vendor status to: ${newVendorStatus}`);
+
+    let vendorResult;
+    if (allPartsPass) {
+      vendorResult = await client.query(
+        `UPDATE local_schedule_vendors 
+         SET vendor_status = 'Sample',
+             approve_by = $2,
+             approve_at = CURRENT_TIMESTAMP,
+             sample_by = $2,
+             sample_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $1 AND is_active = true 
+         RETURNING id, local_schedule_id, vendor_status, approve_by, approve_at`,
+        [vendorId, approveById]
+      );
+    } else {
+      vendorResult = await client.query(
+        `UPDATE local_schedule_vendors 
+         SET vendor_status = 'IQC Progress',
+             approve_by = $2,
+             approve_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $1 AND is_active = true 
+         RETURNING id, local_schedule_id, vendor_status, approve_by, approve_at`,
+        [vendorId, approveById]
+      );
+    }
+    console.log(`[APPROVE Vendor] Vendor status updated to ${newVendorStatus}`);
+
+    // 8. Cek apakah semua vendor di schedule sudah mencapai status yang sama
+    if (allPartsPass) {
+      // Cek apakah semua vendor Sample (Pass tab)
+      const allSampleCheck = await client.query(
+        `SELECT COUNT(*) as total,
+                SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as matched_count
+         FROM local_schedule_vendors WHERE local_schedule_id = $1 AND is_active = true`,
         [scheduleId]
       );
-      console.log(`[APPROVE Vendor] Schedule auto-updated to IQC Progress`);
+      const { total: tc, matched_count: mc } = allSampleCheck.rows[0];
+      if (parseInt(tc) > 0 && parseInt(tc) === parseInt(mc)) {
+        await client.query(
+          `UPDATE local_schedules SET status = 'Sample', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND is_active = true`,
+          [scheduleId]
+        );
+        console.log(`[APPROVE Vendor] Schedule auto-updated to Sample (Pass tab)`);
+      }
+    } else {
+      // Cek apakah semua vendor IQC Progress
+      const allIqcCheck = await client.query(
+        `SELECT COUNT(*) as total,
+                SUM(CASE WHEN vendor_status = 'IQC Progress' THEN 1 ELSE 0 END) as matched_count
+         FROM local_schedule_vendors WHERE local_schedule_id = $1 AND is_active = true`,
+        [scheduleId]
+      );
+      const { total: ti, matched_count: mi } = allIqcCheck.rows[0];
+      if (parseInt(ti) > 0 && parseInt(ti) === parseInt(mi)) {
+        await client.query(
+          `UPDATE local_schedules SET status = 'IQC Progress', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND is_active = true`,
+          [scheduleId]
+        );
+        console.log(`[APPROVE Vendor] Schedule auto-updated to IQC Progress`);
+      }
     }
 
     await client.query("COMMIT");
 
     res.json({
       success: true,
-      message: "Vendor approved and parts added to stock inventory",
+      message: allPartsPass
+        ? "Vendor approved — no sampling needed, moved directly to Pass"
+        : "Vendor approved — parts with incomplete prod_dates moved to IQC Progress",
       data: {
         vendor: vendorResult.rows[0],
         scheduleId: scheduleId,
         stockLevel: finalStockLevel,
         partsAddedToStock: stockResults.length,
         stockMovements: stockResults,
+        allPartsPass,
       },
     });
   } catch (error) {
@@ -1582,6 +1921,124 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
       message: "Failed to move vendor to Sample",
       error: error.message,
     });
+  } finally {
+    client.release();
+  }
+});
+
+// ====== CHECK IQC PROGRESS → AUTO MOVE TO PASS (Sample tab) ======
+// Dipanggil dari frontend saat load tab IQC Progress.
+// Cek semua vendor IQC Progress: jika semua sample_dates sudah Complete di qc_checks → pindahkan ke Pass.
+router.post("/check-iqc-to-pass", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { approvedByName } = req.body || {};
+
+    await client.query("BEGIN");
+
+    // Resolve approvedByName → employee ID (untuk Pass By column)
+    let passById = null;
+    if (approvedByName) {
+      const empResult = await client.query(
+        `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
+        [approvedByName]
+      );
+      if (empResult.rowCount > 0) passById = empResult.rows[0].id;
+    }
+
+    // 1. Ambil semua vendor IQC Progress beserta sample_dates masing-masing part
+    const vendorsResult = await client.query(
+      `SELECT lsv.id as vendor_id, lsv.local_schedule_id,
+              lsp.part_code,
+              COALESCE(lsp.sample_dates::jsonb, '[]'::jsonb) as sample_dates
+       FROM local_schedule_vendors lsv
+       JOIN local_schedule_parts lsp ON lsp.local_schedule_vendor_id = lsv.id AND lsp.is_active = true
+       WHERE lsv.vendor_status = 'IQC Progress' AND lsv.is_active = true`
+    );
+
+    if (vendorsResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.json({ success: true, movedVendors: [] });
+    }
+
+    // 2. Ambil semua qc_checks yang sudah Complete
+    const qcResult = await client.query(
+      `SELECT part_code, TO_CHAR(production_date, 'YYYY-MM-DD') as production_date
+       FROM qc_checks WHERE status = 'Complete' AND is_active = true`
+    );
+    const completedSet = new Set(
+      qcResult.rows.map((r) => `${r.part_code}||${r.production_date}`)
+    );
+
+    // 3. Kelompokkan per vendor: kumpulkan semua sample_dates dari semua part
+    const vendorMap = {};
+    for (const row of vendorsResult.rows) {
+      const vid = row.vendor_id;
+      if (!vendorMap[vid]) {
+        vendorMap[vid] = { local_schedule_id: row.local_schedule_id, allSampleDates: [] };
+      }
+      const sampleDates = typeof row.sample_dates === "string"
+        ? JSON.parse(row.sample_dates)
+        : Array.isArray(row.sample_dates) ? row.sample_dates : [];
+      for (const d of sampleDates) {
+        const dateStr = typeof d === "string" ? d.split("T")[0] : d;
+        vendorMap[vid].allSampleDates.push({ part_code: row.part_code, date: dateStr });
+      }
+    }
+
+    // 4. Cek tiap vendor: apakah semua sample_dates sudah Complete?
+    const movedVendors = [];
+    for (const [vendorId, info] of Object.entries(vendorMap)) {
+      const { allSampleDates, local_schedule_id } = info;
+
+      // Vendor tanpa sample_dates: tidak perlu dipindah (masih perlu sampling manual)
+      if (allSampleDates.length === 0) continue;
+
+      const allComplete = allSampleDates.every(({ part_code, date }) =>
+        completedSet.has(`${part_code}||${date}`)
+      );
+
+      if (!allComplete) continue;
+
+      // Semua sample_dates sudah Complete → pindahkan ke Pass (vendor_status='Sample')
+      // passById sudah di-resolve dari approvedByName yang dikirim frontend (QCCheckPage)
+      await client.query(
+        `UPDATE local_schedule_vendors
+         SET vendor_status = 'Sample',
+             sample_by = COALESCE(sample_by, $2),
+             sample_at = COALESCE(sample_at, CURRENT_TIMESTAMP),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND is_active = true`,
+        [vendorId, passById]
+      );
+
+      // Cek apakah semua vendor di schedule sudah Sample
+      const allVendorsCheck = await client.query(
+        `SELECT COUNT(*) as total,
+                SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as matched_count
+         FROM local_schedule_vendors
+         WHERE local_schedule_id = $1 AND is_active = true`,
+        [local_schedule_id]
+      );
+      const { total, matched_count } = allVendorsCheck.rows[0];
+      if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
+        await client.query(
+          `UPDATE local_schedules SET status = 'Sample', updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1 AND is_active = true`,
+          [local_schedule_id]
+        );
+      }
+
+      movedVendors.push(vendorId);
+      console.log(`[CHECK IQC TO PASS] Vendor ${vendorId} auto-moved to Pass`);
+    }
+
+    await client.query("COMMIT");
+    return res.json({ success: true, movedVendors });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[CHECK IQC TO PASS] Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();
   }

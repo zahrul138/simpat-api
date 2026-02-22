@@ -2419,15 +2419,29 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
         const quantityAfter = quantityBefore + qty;
 
+        // Gabungkan semua prod_dates menjadi comma-separated text (DD/MM/YYYY, ...)
+        const rawProdDatesOsea = typeof part.prod_dates === "string"
+          ? JSON.parse(part.prod_dates)
+          : Array.isArray(part.prod_dates) ? part.prod_dates : [];
+        const productionDatesTextOsea = rawProdDatesOsea.length > 0
+          ? rawProdDatesOsea.map((d) => {
+              const [y, m, day] = String(d).split("T")[0].split("-");
+              return `${day}/${m}/${y}`;
+            }).join(", ")
+          : (part.prod_date
+              ? (() => { const [y, m, day] = part.prod_date.split("-"); return `${day}/${m}/${y}`; })()
+              : null);
+
         const movementResult = await client.query(
           `INSERT INTO stock_movements (part_id, part_code, part_name, movement_type, stock_level,
             quantity, quantity_before, quantity_after, source_type, source_id, source_reference,
-            model, production_date, remark, moved_by, moved_by_name, moved_at, is_active)
-           VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13, $14, $15, CURRENT_TIMESTAMP, true)
+            model, production_date, production_dates, remark, moved_by, moved_by_name, moved_at, is_active)
+           VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13, $14, $15, $16, CURRENT_TIMESTAMP, true)
            RETURNING id`,
           [part.kanban_master_id, part.part_code, part.part_name, finalStockLevel, qty, quantityBefore, quantityAfter,
             "oversea_schedule", vendorId, part.do_number || vendor.do_numbers, part.model || modelName,
-          part.prod_date || null, part.remark || `Approved from oversea vendor: ${vendor.vendor_name || "Unknown"}`,
+          part.prod_date || null, productionDatesTextOsea,
+          part.remark || `Approved from oversea vendor: ${vendor.vendor_name || "Unknown"}`,
             approveById, approveByName || null]
         );
 

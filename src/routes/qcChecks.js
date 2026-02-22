@@ -302,6 +302,94 @@ router.post("/", async (req, res) => {
   }
 });
 
+// ====== HELPER: Auto-move local vendor to Pass if all M101 QC checks approved ======
+// Mirror dari checkAndMoveVendorToPassIfAllApproved di overseaSchedules.js
+const checkAndMoveLocalVendorToPassIfAllApproved = async (client, vendorId, approvedById) => {
+  try {
+    console.log(`[checkAndMoveLocalVendor] Checking vendor ${vendorId}`);
+
+    // Hitung total M101 qc_checks untuk vendor ini
+    const totalChecksResult = await client.query(
+      `SELECT COUNT(*) as total
+       FROM qc_checks
+       WHERE source_vendor_id = $1
+         AND data_from = 'M101'
+         AND is_active = true`,
+      [vendorId]
+    );
+    const totalChecks = parseInt(totalChecksResult.rows[0].total) || 0;
+
+    if (totalChecks === 0) {
+      console.log(`[checkAndMoveLocalVendor] No M101 QC checks found for vendor ${vendorId}`);
+      return false;
+    }
+
+    // Hitung yang sudah Complete
+    const approvedChecksResult = await client.query(
+      `SELECT COUNT(*) as approved
+       FROM qc_checks
+       WHERE source_vendor_id = $1
+         AND data_from = 'M101'
+         AND status = 'Complete'
+         AND is_active = true`,
+      [vendorId]
+    );
+    const approvedChecks = parseInt(approvedChecksResult.rows[0].approved) || 0;
+
+    console.log(`[checkAndMoveLocalVendor] Vendor ${vendorId}: ${approvedChecks}/${totalChecks} approved`);
+
+    // Jika semua sudah Complete → pindahkan vendor ke tab Pass (vendor_status='Sample')
+    if (totalChecks > 0 && approvedChecks === totalChecks) {
+      console.log(`[checkAndMoveLocalVendor] All done! Moving vendor ${vendorId} to Sample (Pass tab)`);
+
+      await client.query(
+        `UPDATE local_schedule_vendors
+         SET vendor_status = 'Sample',
+             sample_by = $2,
+             sample_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND is_active = true`,
+        [vendorId, approvedById]
+      );
+
+      // Cek apakah semua vendor di schedule sudah Sample → update schedule status
+      const vendorInfo = await client.query(
+        `SELECT local_schedule_id FROM local_schedule_vendors WHERE id = $1`,
+        [vendorId]
+      );
+
+      if (vendorInfo.rowCount > 0) {
+        const scheduleId = vendorInfo.rows[0].local_schedule_id;
+
+        const allVendorsCheck = await client.query(
+          `SELECT COUNT(*) as total,
+                  SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as sample_count
+           FROM local_schedule_vendors
+           WHERE local_schedule_id = $1 AND is_active = true`,
+          [scheduleId]
+        );
+        const { total, sample_count } = allVendorsCheck.rows[0];
+        if (parseInt(total) > 0 && parseInt(total) === parseInt(sample_count)) {
+          await client.query(
+            `UPDATE local_schedules
+             SET status = 'Sample', updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND is_active = true`,
+            [scheduleId]
+          );
+          console.log(`[checkAndMoveLocalVendor] Schedule ${scheduleId} moved to Sample`);
+        }
+      }
+
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.error(`[checkAndMoveLocalVendor] Error:`, error.message);
+    return false;
+  }
+};
+
 // ====== APPROVE QC Check ======
 router.put("/:id/approve", async (req, res) => {
   const client = await pool.connect();
@@ -431,6 +519,13 @@ router.put("/:id/approve", async (req, res) => {
         console.error(`[QC APPROVE] Error auto-moving vendor:`, autoMoveError.message);
         // Don't rollback, just log
       }
+    }
+
+    // AUTO-MOVE TO SAMPLE (Pass): Jika semua M101 qc_checks untuk vendor ini sudah Complete
+    // PERBAIKAN: Tidak bergantung isLastQcCheck dari frontend — query DB langsung (mirip M136 di overseaSchedules)
+    if (data_from === 'M101' && source_vendor_id) {
+      const moved = await checkAndMoveLocalVendorToPassIfAllApproved(client, source_vendor_id, approvedById);
+      if (moved) vendorMovedToPass = true;
     }
 
     await client.query("COMMIT");

@@ -21,6 +21,8 @@ router.get("/", async (req, res) => {
         TO_CHAR(schedule_date, 'YYYY-MM-DD') as schedule_date,
         received_by_name,
         TO_CHAR(received_at, 'YYYY-MM-DD HH24:MI:SS') as received_at,
+        moved_by_name,
+        TO_CHAR(moved_at, 'YYYY-MM-DD HH24:MI:SS') as moved_at,
         status_tab,
         status_part,
         EXISTS (
@@ -134,16 +136,34 @@ router.post("/move-to-m136", async (req, res) => {
       [ids]
     );
 
-    // Process each item: update stock and create movements
+    // Group items by part_code — so multi-row same part_code = 1 movement record
+    const groupedByPartCode = {};
     for (const item of itemsQuery.rows) {
-      const partCode = item.part_code;
-      const qty = parseInt(item.qty);
+      const key = item.part_code;
+      if (!groupedByPartCode[key]) {
+        groupedByPartCode[key] = {
+          part_id:   item.part_id,
+          part_code: item.part_code,
+          part_name: item.part_name,
+          model:     item.model,
+          schedule_date: item.schedule_date,
+          totalQty:  0,
+          ids:       [],
+        };
+      }
+      groupedByPartCode[key].totalQty += parseInt(item.qty);
+      groupedByPartCode[key].ids.push(item.id);
+    }
+
+    // Process each unique part_code group: update stock + 1 movement record
+    for (const group of Object.values(groupedByPartCode)) {
+      const { part_id, part_code, part_name, model, schedule_date, totalQty } = group;
 
       // Get current stock levels
       const stockQuery = await client.query(
         `SELECT stock_off_system, stock_m136 FROM kanban_master 
          WHERE part_code = $1 AND is_active = true`,
-        [partCode]
+        [part_code]
       );
 
       let currentOffSystemStock = 0;
@@ -153,20 +173,20 @@ router.post("/move-to-m136", async (req, res) => {
         currentM136Stock = parseInt(stockQuery.rows[0].stock_m136) || 0;
       }
 
-      const newOffSystemStock = Math.max(0, currentOffSystemStock - qty);
-      const newM136Stock = currentM136Stock + qty;
+      const newOffSystemStock = Math.max(0, currentOffSystemStock - totalQty);
+      const newM136Stock = currentM136Stock + totalQty;
 
-      // Update kanban_master
+      // Update kanban_master (once per part_code)
       await client.query(
         `UPDATE kanban_master 
          SET stock_off_system = $1,
              stock_m136 = $2,
              updated_at = CURRENT_TIMESTAMP
          WHERE part_code = $3 AND is_active = true`,
-        [newOffSystemStock, newM136Stock, partCode]
+        [newOffSystemStock, newM136Stock, part_code]
       );
 
-      // Create stock_movement: OUT from Off System
+      // Create 1 stock_movement: OUT from Off System (total qty)
       await client.query(
         `INSERT INTO stock_movements (
           part_id, part_code, part_name, movement_type, stock_level,
@@ -176,26 +196,26 @@ router.post("/move-to-m136", async (req, res) => {
           moved_by, moved_by_name, moved_at, is_active
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::date, $14, $15, $16, CURRENT_TIMESTAMP, true)`,
         [
-          item.part_id,
-          partCode,
-          item.part_name,
+          part_id,
+          part_code,
+          part_name,
           'OUT',
           'Off System',
-          qty,
+          totalQty,
           currentOffSystemStock,
           newOffSystemStock,
           'storage_inventory',
-          item.id,
+          group.ids[0],
           'Moved to M136 System',
-          item.model,
-          item.schedule_date,
-          `${qty} PCS moved from Off System to M136 System`,
+          model,
+          schedule_date,
+          `${totalQty} PCS moved from Off System to M136 System`,
           movedById,
           moved_by_name
         ]
       );
 
-      // Create stock_movement: IN to M136
+      // Create 1 stock_movement: IN to M136 (total qty)
       await client.query(
         `INSERT INTO stock_movements (
           part_id, part_code, part_name, movement_type, stock_level,
@@ -205,26 +225,26 @@ router.post("/move-to-m136", async (req, res) => {
           moved_by, moved_by_name, moved_at, is_active
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::date, $14, $15, $16, CURRENT_TIMESTAMP, true)`,
         [
-          item.part_id,
-          partCode,
-          item.part_name,
+          part_id,
+          part_code,
+          part_name,
           'IN',
           'M136',
-          qty,
+          totalQty,
           currentM136Stock,
           newM136Stock,
           'storage_inventory',
-          item.id,
+          group.ids[0],
           'From Off System',
-          item.model,
-          item.schedule_date,
-          `${qty} PCS received from Off System`,
+          model,
+          schedule_date,
+          `${totalQty} PCS received from Off System`,
           movedById,
           moved_by_name
         ]
       );
 
-      console.log(`[Move to M136] Created stock movements for ${partCode}: OUT Off System, IN M136`);
+      console.log(`[Move to M136] ${part_code}: ${group.ids.length} row(s) grouped → 1 movement, total qty: ${totalQty}`);
     }
 
     await client.query("COMMIT");
