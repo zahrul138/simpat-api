@@ -443,6 +443,7 @@ router.get("/", async (req, res) => {
         ps.target_date,
         ps.status,
         COALESCE(ps.total_input,0) AS total_input,
+        COALESCE(ps.actual_input,0) AS actual_input,
         COALESCE(ps.total_customer,0) AS total_customer,
         COALESCE(ps.total_model,0) AS total_model,
         COALESCE(ps.total_pallet,0) AS total_pallet,
@@ -466,33 +467,34 @@ router.get("/", async (req, res) => {
     // Fungsi untuk memformat tanggal ke YYYY-MM-DD
     const formatToYYYYMMDD = (dateString) => {
       if (!dateString) return null;
-      
       try {
         let dateObj;
-        
-        // Jika tanggal sudah mengandung T (ISO format)
-        if (dateString.includes('T')) {
-          dateObj = new Date(dateString);
+        // Jika sudah berupa Date object (dari PostgreSQL pg driver)
+        if (dateString instanceof Date) {
+          dateObj = dateString;
         } else {
-          // Jika hanya YYYY-MM-DD
-          dateObj = new Date(dateString + 'T00:00:00');
+          const str = String(dateString);
+          // Jika tanggal sudah mengandung T (ISO format)
+          if (str.includes('T')) {
+            dateObj = new Date(str);
+          } else {
+            // Jika hanya YYYY-MM-DD
+            dateObj = new Date(str + 'T00:00:00');
+          }
         }
-        
         // Validasi tanggal
         if (isNaN(dateObj.getTime())) {
-          console.warn('Invalid date string:', dateString);
-          return dateString;
+          console.warn('Invalid date value:', dateString);
+          return String(dateString);
         }
-        
         // Format ke YYYY-MM-DD
         const year = dateObj.getFullYear();
         const month = String(dateObj.getMonth() + 1).padStart(2, '0');
         const day = String(dateObj.getDate()).padStart(2, '0');
-        
         return `${year}-${month}-${day}`;
       } catch (error) {
         console.error('Error formatting date:', error.message);
-        return dateString;
+        return String(dateString);
       }
     };
 
@@ -509,6 +511,7 @@ router.get("/", async (req, res) => {
         target_date_display: formattedDate, // TAMBAHKAN INI
         status: r.status,
         total_input: Number(r.total_input || 0),
+        actual_input: Number(r.actual_input || 0),
         total_customer: Number(r.total_customer || 0),
         total_model: Number(r.total_model || 0),
         total_pallet: Number(r.total_pallet || 0),
@@ -611,25 +614,26 @@ router.get("/:id", async (req, res) => {
     // Fungsi untuk memformat tanggal ke YYYY-MM-DD
     const formatToYYYYMMDD = (dateString) => {
       if (!dateString) return null;
-      
       try {
         let dateObj;
-        
-        if (dateString.includes('T')) {
-          dateObj = new Date(dateString);
+        // Jika sudah berupa Date object (dari PostgreSQL pg driver)
+        if (dateString instanceof Date) {
+          dateObj = dateString;
         } else {
-          dateObj = new Date(dateString + 'T00:00:00');
+          const str = String(dateString);
+          if (str.includes('T')) {
+            dateObj = new Date(str);
+          } else {
+            dateObj = new Date(str + 'T00:00:00');
+          }
         }
-        
         if (isNaN(dateObj.getTime())) {
-          console.warn('Invalid date string:', dateString);
-          return dateString;
+          console.warn('Invalid date value:', dateString);
+          return String(dateString);
         }
-        
         const year = dateObj.getFullYear();
         const month = String(dateObj.getMonth() + 1).padStart(2, '0');
         const day = String(dateObj.getDate()).padStart(2, '0');
-        
         return `${year}-${month}-${day}`;
       } catch (error) {
         console.error('Error formatting date:', error.message);
@@ -878,12 +882,20 @@ router.delete("/details/:id", async (req, res) => {
   }
 });
 
+// Helper: ambil tanggal lokal (YYYY-MM-DD) tanpa toISOString agar tidak terpengaruh timezone UTC
+const getLocalDateString = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 router.patch("/auto-progress", async (req, res) => {
   const client = await pool.connect();
   try {
     const now = new Date();
     const currentTime = now.toTimeString().slice(0, 5); // HH:MM
-    const currentDate = now.toISOString().split("T")[0];
+    const currentDate = getLocalDateString(now); // LOCAL date (bukan UTC)
 
     console.log(
       `[AUTO-PROGRESS] Checking at ${currentTime} on ${currentDate}`
@@ -1096,12 +1108,12 @@ router.patch("/auto-complete", async (req, res) => {
     const currentHours = now.getHours();
     const currentMinutes = now.getMinutes();
     const currentSeconds = now.getSeconds();
-    
+
     // Format waktu saat ini: HH:MM
     const currentTime = `${currentHours.toString().padStart(2, '0')}:${currentMinutes.toString().padStart(2, '0')}`;
-    
-    // Format tanggal hari ini: YYYY-MM-DD
-    const currentDate = now.toISOString().split('T')[0];
+
+    // Format tanggal LOCAL (bukan toISOString yang UTC — jam 00-06 WIB bisa beri tanggal kemarin)
+    const currentDate = getLocalDateString(now);
 
     console.log(
       `[AUTO-COMPLETE] Checking at ${currentTime}:${currentSeconds} on ${currentDate}`
@@ -1196,5 +1208,330 @@ router.patch("/auto-complete", async (req, res) => {
     client.release();
   }
 });
+
+// ===== PATCH /:id/approve-units =====
+// Body: { count: N, approved_by_id: empId, remark: "..." (single only) }
+router.patch("/:id/approve-units", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id    = Number(req.params.id || 0);
+    const count = Number(req.body?.count ?? 1);
+    const approvedById = req.body?.approved_by_id || null;
+    const remark       = req.body?.remark         || null;
+
+    if (!id) return res.status(400).json({ message: "Invalid id." });
+    if (!Number.isInteger(count) || count < 1)
+      return res.status(400).json({ message: "count must be a positive integer." });
+
+    const cur = await client.query(
+      `SELECT total_input, actual_input FROM public.production_schedules WHERE id = $1 AND is_active = true`,
+      [id]
+    );
+    if (cur.rowCount === 0)
+      return res.status(404).json({ message: "Schedule tidak ditemukan." });
+
+    const totalInput  = Number(cur.rows[0].total_input  || 0);
+    const actualInput = Number(cur.rows[0].actual_input || 0);
+
+    await client.query("BEGIN");
+
+    const now = new Date();
+
+    // Ambil semua unit yang sudah ada record (approved atau skipped)
+    const existingRes = await client.query(
+      `SELECT unit_no, COALESCE(status, 'approved') AS status
+       FROM public.target_scan_approvals WHERE schedule_id = $1`,
+      [id]
+    );
+    const existingMap = {};
+    existingRes.rows.forEach((r) => { existingMap[Number(r.unit_no)] = r.status; });
+
+    // Cari unit Pending pertama (bukan approved, bukan skipped)
+    // untuk menentukan titik awal — lalu fill sebanyak count
+    let filledCount = 0;
+    let nextUnit = 1;
+    // Lewati unit yang sudah approved (agar tidak double count)
+    while (nextUnit <= totalInput && existingMap[nextUnit] === 'approved') nextUnit++;
+
+    while (filledCount < count && nextUnit <= totalInput) {
+      const existStatus = existingMap[nextUnit];
+      if (existStatus === 'skipped') { nextUnit++; continue; }
+      if (existStatus === 'approved') { nextUnit++; continue; }
+      // Unit ini Pending — approve
+      await client.query(
+        `INSERT INTO public.target_scan_approvals (schedule_id, unit_no, remark, approved_by, approved_at, status)
+         VALUES ($1, $2, $3, $4, $5, 'approved')
+         ON CONFLICT (schedule_id, unit_no) DO UPDATE
+           SET status = 'approved', remark = EXCLUDED.remark,
+               approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at`,
+        [id, nextUnit, remark || null, approvedById, now]
+      );
+      filledCount++;
+      nextUnit++;
+    }
+
+    // Hitung ulang actual_input = hanya unit berstatus approved
+    const approvedCountRes = await client.query(
+      `SELECT COUNT(*) AS cnt FROM public.target_scan_approvals
+       WHERE schedule_id = $1 AND COALESCE(status, 'approved') = 'approved'`,
+      [id]
+    );
+    const updatedActual = Number(approvedCountRes.rows[0].cnt);
+
+    const result = await client.query(
+      `UPDATE public.production_schedules
+         SET actual_input = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND is_active = true
+       RETURNING id, prod_schedule_code, total_input, actual_input`,
+      [updatedActual, id]
+    );
+
+    let approvedByName = null;
+    if (approvedById) {
+      const empRes = await client.query(
+        `SELECT emp_name FROM public.employees WHERE id = $1 LIMIT 1`,
+        [approvedById]
+      );
+      if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      message: `Approved ${filledCount} unit(s)`,
+      data: result.rows[0],
+      approved_by_name: approvedByName,
+      approved_at: now.toISOString(),
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ERR PATCH /api/production-schedules/:id/approve-units", err.message);
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    client.release();
+  }
+});
+
+// ===== GET /:id/scan-approvals =====
+router.get("/:id/scan-approvals", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = Number(req.params.id || 0);
+    if (!id) return res.status(400).json({ message: "Invalid id." });
+
+    const result = await client.query(
+      `SELECT
+         a.unit_no,
+         a.remark,
+         a.approved_at,
+         COALESCE(a.status, 'approved') AS status,
+         CASE
+           WHEN e.emp_name IS NOT NULL THEN
+             e.emp_name || ' | ' || TO_CHAR(a.approved_at, 'DD/MM/YYYY HH24:MI')
+           ELSE
+             'User-' || COALESCE(a.approved_by::text, 'System') || ' | ' || TO_CHAR(a.approved_at, 'DD/MM/YYYY HH24:MI')
+         END AS approved_by_name
+       FROM public.target_scan_approvals a
+       LEFT JOIN public.employees e ON e.id = a.approved_by
+       WHERE a.schedule_id = $1
+       ORDER BY a.unit_no`,
+      [id]
+    );
+
+    return res.json(result.rows);
+  } catch (err) {
+    console.error("ERR GET /api/production-schedules/:id/scan-approvals", err.message);
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    client.release();
+  }
+});
+
+// ===== PATCH /:id/skip-unit =====
+router.patch("/:id/skip-unit", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const scheduleId = Number(req.params.id || 0);
+    const { unit_no, remark } = req.body || {};
+    if (!scheduleId) return res.status(400).json({ message: "Invalid id." });
+    if (!unit_no)    return res.status(400).json({ message: "unit_no required." });
+    if (!remark || !String(remark).trim())
+      return res.status(400).json({ message: "Remark wajib diisi untuk Skip." });
+
+    const cur = await client.query(
+      `SELECT id FROM public.production_schedules WHERE id = $1 AND is_active = true`,
+      [scheduleId]
+    );
+    if (cur.rowCount === 0) return res.status(404).json({ message: "Schedule tidak ditemukan." });
+
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO public.target_scan_approvals (schedule_id, unit_no, remark, approved_by, approved_at, status)
+       VALUES ($1, $2, $3, NULL, CURRENT_TIMESTAMP, 'skipped')
+       ON CONFLICT (schedule_id, unit_no) DO UPDATE
+         SET remark = EXCLUDED.remark, approved_at = EXCLUDED.approved_at, status = 'skipped'`,
+      [scheduleId, unit_no, remark]
+    );
+    const skipCountRes = await client.query(
+      `SELECT COUNT(*) AS cnt FROM public.target_scan_approvals
+       WHERE schedule_id = $1 AND COALESCE(status, 'approved') = 'approved'`,
+      [scheduleId]
+    );
+    const skipNewActual = Number(skipCountRes.rows[0].cnt);
+    await client.query(
+      `UPDATE public.production_schedules SET actual_input = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [skipNewActual, scheduleId]
+    );
+    await client.query("COMMIT");
+    return res.json({ message: `Unit ${unit_no} di-skip`, new_actual_input: skipNewActual });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ERR PATCH /:id/skip-unit", err.message);
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    client.release();
+  }
+});
+
+// ===== PATCH /:id/approve-single =====
+// Approve unit_no spesifik (untuk tab Complete - tidak harus sequential dari actual_input)
+router.patch("/:id/approve-single", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const scheduleId = Number(req.params.id || 0);
+    const { unit_no, approved_by_id, remark } = req.body || {};
+    if (!scheduleId) return res.status(400).json({ message: "Invalid id." });
+    if (!unit_no) return res.status(400).json({ message: "unit_no required." });
+
+    const cur = await client.query(
+      `SELECT total_input, actual_input FROM public.production_schedules WHERE id = $1 AND is_active = true`,
+      [scheduleId]
+    );
+    if (cur.rowCount === 0) return res.status(404).json({ message: "Schedule tidak ditemukan." });
+
+    // Ambil customer dari breakdown
+    const detailRes = await client.query(
+      `SELECT c.cust_name, d.input_quantity
+       FROM public.production_schedule_details d
+       LEFT JOIN public.customers c ON c.id = d.customer_id
+       WHERE d.production_schedule_id = $1
+       ORDER BY d.sequence_number ASC, d.id ASC`,
+      [scheduleId]
+    );
+    let cumulative = 0;
+    const breakdown = detailRes.rows.map((row) => {
+      const start = cumulative;
+      cumulative += Number(row.input_quantity || 0);
+      return { cust_name: row.cust_name, start, end: cumulative };
+    });
+    const getCustomer = (u) => {
+      for (const b of breakdown) {
+        if (u > b.start && u <= b.end) return b.cust_name || null;
+      }
+      return breakdown.length > 0 ? breakdown[breakdown.length - 1].cust_name || null : null;
+    };
+
+    const now = new Date();
+    const customer = getCustomer(Number(unit_no));
+
+    await client.query("BEGIN");
+
+    // Insert atau update approval record — set status='approved'
+    await client.query(
+      `INSERT INTO public.target_scan_approvals (schedule_id, unit_no, remark, approved_by, approved_at, customer, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'approved')
+       ON CONFLICT (schedule_id, unit_no) DO UPDATE
+         SET remark = EXCLUDED.remark,
+             approved_by = EXCLUDED.approved_by,
+             approved_at = EXCLUDED.approved_at,
+             status = 'approved'`,
+      [scheduleId, unit_no, remark || null, approved_by_id || null, now, customer]
+    );
+
+    // Hitung actual_input = hanya unit berstatus 'approved'
+    const singleCountRes = await client.query(
+      `SELECT COUNT(*) AS cnt FROM public.target_scan_approvals
+       WHERE schedule_id = $1 AND COALESCE(status, 'approved') = 'approved'`,
+      [scheduleId]
+    );
+    const singleNewActual = Number(singleCountRes.rows[0].cnt);
+    await client.query(
+      `UPDATE public.production_schedules SET actual_input = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [singleNewActual, scheduleId]
+    );
+
+    await client.query("COMMIT");
+
+    let approvedByName = null;
+    if (approved_by_id) {
+      const empRes = await client.query(
+        `SELECT emp_name FROM public.employees WHERE id = $1 LIMIT 1`,
+        [approved_by_id]
+      );
+      if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
+    }
+
+    return res.json({
+      message: `Unit ${unit_no} berhasil di-approve`,
+      approved_by_name: approvedByName,
+      approved_at: now.toISOString(),
+      new_actual_input: singleNewActual,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ERR PATCH /:id/approve-single", err.message);
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    client.release();
+  }
+});
+
+// ===== PATCH /:id/update-approval =====
+// Edit remark + update approved_by pada approval yang sudah ada
+router.patch("/:id/update-approval", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const scheduleId = Number(req.params.id || 0);
+    const { unit_no, remark, approved_by_id } = req.body || {};
+    if (!scheduleId) return res.status(400).json({ message: "Invalid id." });
+    if (!unit_no) return res.status(400).json({ message: "unit_no required." });
+
+    const now = new Date();
+    const result = await client.query(
+      `UPDATE public.target_scan_approvals
+         SET remark = $1,
+             approved_by = $2,
+             approved_at = $3
+       WHERE schedule_id = $4 AND unit_no = $5
+       RETURNING unit_no`,
+      [remark || null, approved_by_id || null, now, scheduleId, unit_no]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "Approval record tidak ditemukan." });
+    }
+
+    let approvedByName = null;
+    if (approved_by_id) {
+      const empRes = await client.query(
+        `SELECT emp_name FROM public.employees WHERE id = $1 LIMIT 1`,
+        [approved_by_id]
+      );
+      if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
+    }
+
+    return res.json({
+      message: `Remark unit ${unit_no} berhasil diupdate`,
+      approved_by_name: approvedByName,
+      approved_at: now.toISOString(),
+    });
+  } catch (err) {
+    console.error("ERR PATCH /:id/update-approval", err.message);
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    client.release();
+  }
+});
+
 
 module.exports = router;

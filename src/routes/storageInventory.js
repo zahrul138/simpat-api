@@ -68,7 +68,7 @@ router.get("/", async (req, res) => {
       params.push(`%${part_name}%`);
     }
 
-    query += ` ORDER BY received_at DESC`;
+    query += ` ORDER BY received_at DESC, id ASC`;
 
     const { rows } = await pool.query(query, params);
     res.json({

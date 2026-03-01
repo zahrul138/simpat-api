@@ -50,7 +50,7 @@ router.get("/by-part-code", async (req, res) => {
   } catch (err) {
     console.error("Error /api/kanban-master/by-part-code:", err);
     res.status(500).json({ message: "Internal server error" });
-  }
+  } 
 });
 
 // POST /api/kanban-master - VERSION WITHOUT COUNTER UPDATES
@@ -76,6 +76,8 @@ router.post("/", async (req, res) => {
       placement_id,
       part_weight,
       weight_unit,
+      assembly_station,
+      qty_per_assembly,
     } = req.body;
 
     console.log("=== POST /api/kanban-master ===");
@@ -182,9 +184,11 @@ router.post("/", async (req, res) => {
         kanban_id, quantity_per_kanban, max_kanban_quantity, 
         current_quantity, kanban_status, qty_unit, qty_box, size_id,
         placement_id, part_weight, weight_unit,
+        assembly_station, qty_per_assembly,
         created_at, updated_at, is_active
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 
-                $16, 1, 100, 0, 'Active', 0, 0, $17, $18, $19, $20, 
+                $16, 1, 100, 0, 'Active', 0, 0, $17, $18, $19, $20,
+                $21, $22,
                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true) 
       RETURNING *
     `;
@@ -210,6 +214,8 @@ router.post("/", async (req, res) => {
       finalPlacementId,
       part_weight || null,
       weight_unit || "kg",
+      assembly_station || null,
+      parseInt(qty_per_assembly) || 1,
     ];
 
     const { rows } = await client.query(insertQuery, values);
@@ -281,6 +287,12 @@ router.get("/with-details", async (req, res) => {
         km.created_at,
         km.updated_at,
         km.is_active,
+        km.assembly_station,
+        km.qty_per_assembly,
+        COALESCE(km.stock_m101, 0) as stock_m101,
+        COALESCE(km.stock_m136, 0) as stock_m136,
+        COALESCE(km.stock_off_system, 0) as stock_off_system,
+        COALESCE(km.stock_hold, 0) as stock_hold,
         ps.size_name,
         vd.vendor_name,
         vd.vendor_code,
@@ -445,6 +457,8 @@ router.put("/:id", async (req, res) => {
       placement_id,
       part_weight,
       weight_unit,
+      assembly_station,
+      qty_per_assembly,
     } = req.body;
 
     console.log(`=== PUT /api/kanban-master/${id} ===`);
@@ -511,8 +525,10 @@ router.put("/:id", async (req, res) => {
         placement_id = COALESCE($14, placement_id),
         part_weight = COALESCE($15, part_weight),
         weight_unit = COALESCE($16, weight_unit),
+        assembly_station = $17,
+        qty_per_assembly = COALESCE($18, qty_per_assembly),
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $17
+      WHERE id = $19
       RETURNING *
     `;
 
@@ -533,6 +549,8 @@ router.put("/:id", async (req, res) => {
       numericPlacementId,
       part_weight,
       weight_unit,
+      assembly_station !== undefined ? (assembly_station || null) : undefined,
+      qty_per_assembly ? parseInt(qty_per_assembly) : null,
       id,
     ];
 

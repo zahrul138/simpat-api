@@ -4,10 +4,6 @@ const pool = require('../db');
 
 const router = express.Router();
 
-/**
- * POST /auth/login
- * body: { username, password }
- */
 router.post('/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
