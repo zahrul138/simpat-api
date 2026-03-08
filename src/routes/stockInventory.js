@@ -227,7 +227,7 @@ router.post("/add-stock", async (req, res) => {
     }
 
     // Validasi stock_level
-    const validStockLevels = ["M101", "M136", "Off System", "RTV"];
+    const validStockLevels = ["M101", "M136", "Off System", "RTV", "SCRAP"];
     if (!validStockLevels.includes(stock_level.toUpperCase())) {
       return res.status(400).json({
         success: false,
@@ -239,7 +239,7 @@ router.post("/add-stock", async (req, res) => {
 
     // Get part info from kanban_master
     const partResult = await client.query(
-      `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv
+      `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv, COALESCE(stock_scrap, 0) AS stock_scrap
        FROM kanban_master 
        WHERE part_code = $1 AND is_active = true
        LIMIT 1`,
@@ -263,6 +263,7 @@ router.post("/add-stock", async (req, res) => {
       else if (stockLevelUpper === "M136") quantityBefore = part.stock_m136 || 0;
       else if (stockLevelUpper === "OFF SYSTEM") quantityBefore = part.stock_off_system || 0;
       else if (stockLevelUpper === "RTV") quantityBefore = part.stock_rtv || 0;
+      else if (stockLevelUpper === "SCRAP") quantityBefore = part.stock_scrap || 0;
     }
 
     const quantityAfter = quantityBefore + parseInt(quantity);
@@ -309,6 +310,7 @@ router.post("/add-stock", async (req, res) => {
       if (stockLevelUpper === "M136") updateColumn = "stock_m136";
       else if (stockLevelUpper === "OFF SYSTEM") updateColumn = "stock_off_system";
       else if (stockLevelUpper === "RTV") updateColumn = "stock_rtv";
+      else if (stockLevelUpper === "SCRAP") updateColumn = "stock_scrap";
 
       await client.query(
         `UPDATE kanban_master 
@@ -539,7 +541,7 @@ router.post("/reduce-stock", async (req, res) => {
 
     // Get part info
     const partResult = await client.query(
-      `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv
+      `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv, COALESCE(stock_scrap, 0) AS stock_scrap
        FROM kanban_master 
        WHERE part_code = $1 AND is_active = true
        LIMIT 1`,
@@ -562,6 +564,7 @@ router.post("/reduce-stock", async (req, res) => {
       else if (stockLevelUpper === "M136") quantityBefore = part.stock_m136 || 0;
       else if (stockLevelUpper === "OFF SYSTEM") quantityBefore = part.stock_off_system || 0;
       else if (stockLevelUpper === "RTV") quantityBefore = part.stock_rtv || 0;
+      else if (stockLevelUpper === "SCRAP") quantityBefore = part.stock_scrap || 0;
     }
 
     // Check if sufficient stock
@@ -614,6 +617,7 @@ router.post("/reduce-stock", async (req, res) => {
       if (stockLevelUpper === "M136") updateColumn = "stock_m136";
       else if (stockLevelUpper === "OFF SYSTEM") updateColumn = "stock_off_system";
       else if (stockLevelUpper === "RTV") updateColumn = "stock_rtv";
+      else if (stockLevelUpper === "SCRAP") updateColumn = "stock_scrap";
 
       await client.query(
         `UPDATE kanban_master 

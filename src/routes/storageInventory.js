@@ -2,13 +2,12 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-// GET /api/storage-inventory
 router.get("/", async (req, res) => {
   try {
-    const { status_tab, date_from, date_to, vendor_name, part_code, part_name } = req.query;
+    const { status_tab, date_from, date_to, vendor_name, part_code, part_name, label_id } = req.query;
 
     let query = `
-      SELECT 
+      SELECT
         id,
         label_id,
         part_id,
@@ -25,10 +24,11 @@ router.get("/", async (req, res) => {
         TO_CHAR(moved_at, 'YYYY-MM-DD HH24:MI:SS') as moved_at,
         status_tab,
         status_part,
+        remark,
         EXISTS (
-          SELECT 1 FROM parts_enquiry_non_id pe 
-          WHERE pe.storage_inventory_id = storage_inventory.id 
-            AND pe.is_active = true 
+          SELECT 1 FROM parts_enquiry_non_id pe
+          WHERE pe.storage_inventory_id = storage_inventory.id
+            AND pe.is_active = true
             AND pe.status IN ('New', 'Waiting')
         ) as is_requested
       FROM storage_inventory
@@ -67,6 +67,11 @@ router.get("/", async (req, res) => {
       query += ` AND part_name ILIKE $${paramCount}`;
       params.push(`%${part_name}%`);
     }
+    if (label_id) {
+      paramCount++;
+      query += ` AND label_id ILIKE $${paramCount}`;
+      params.push(`%${label_id}%`);
+    }
 
     query += ` ORDER BY received_at DESC, id ASC`;
 
@@ -85,7 +90,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /api/storage-inventory/move-to-m136
 router.post("/move-to-m136", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -96,11 +100,10 @@ router.post("/move-to-m136", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Get items data with additional fields for stock_movements
     const itemsQuery = await client.query(
-      `SELECT id, part_id, part_code, part_name, qty, vendor_name, model, 
+      `SELECT id, part_id, part_code, part_name, qty, vendor_name, model,
               TO_CHAR(schedule_date, 'YYYY-MM-DD') as schedule_date
-       FROM storage_inventory 
+       FROM storage_inventory
        WHERE id = ANY($1::int[]) AND is_active = true AND status_tab = 'Off System'`,
       [ids]
     );
@@ -113,7 +116,6 @@ router.post("/move-to-m136", async (req, res) => {
       });
     }
 
-    // Resolve employee ID
     let movedById = null;
     if (moved_by_name) {
       const empResult = await client.query(
@@ -126,8 +128,8 @@ router.post("/move-to-m136", async (req, res) => {
     }
 
     const updateResult = await client.query(
-      `UPDATE storage_inventory 
-       SET status_tab = 'M136 System', 
+      `UPDATE storage_inventory
+       SET status_tab = 'M136 System',
            status_part = 'OK',
            stock_level = 'M136',
            updated_at = CURRENT_TIMESTAMP
@@ -136,7 +138,6 @@ router.post("/move-to-m136", async (req, res) => {
       [ids]
     );
 
-    // Group items by part_code — so multi-row same part_code = 1 movement record
     const groupedByPartCode = {};
     for (const item of itemsQuery.rows) {
       const key = item.part_code;
@@ -155,13 +156,11 @@ router.post("/move-to-m136", async (req, res) => {
       groupedByPartCode[key].ids.push(item.id);
     }
 
-    // Process each unique part_code group: update stock + 1 movement record
     for (const group of Object.values(groupedByPartCode)) {
       const { part_id, part_code, part_name, model, schedule_date, totalQty } = group;
 
-      // Get current stock levels
       const stockQuery = await client.query(
-        `SELECT stock_off_system, stock_m136 FROM kanban_master 
+        `SELECT stock_off_system, stock_m136 FROM kanban_master
          WHERE part_code = $1 AND is_active = true`,
         [part_code]
       );
@@ -176,9 +175,8 @@ router.post("/move-to-m136", async (req, res) => {
       const newOffSystemStock = Math.max(0, currentOffSystemStock - totalQty);
       const newM136Stock = currentM136Stock + totalQty;
 
-      // Update kanban_master (once per part_code)
       await client.query(
-        `UPDATE kanban_master 
+        `UPDATE kanban_master
          SET stock_off_system = $1,
              stock_m136 = $2,
              updated_at = CURRENT_TIMESTAMP
@@ -186,7 +184,6 @@ router.post("/move-to-m136", async (req, res) => {
         [newOffSystemStock, newM136Stock, part_code]
       );
 
-      // Create 1 stock_movement: OUT from Off System (total qty)
       await client.query(
         `INSERT INTO stock_movements (
           part_id, part_code, part_name, movement_type, stock_level,
@@ -215,7 +212,6 @@ router.post("/move-to-m136", async (req, res) => {
         ]
       );
 
-      // Create 1 stock_movement: IN to M136 (total qty)
       await client.query(
         `INSERT INTO stock_movements (
           part_id, part_code, part_name, movement_type, stock_level,
@@ -267,12 +263,11 @@ router.post("/move-to-m136", async (req, res) => {
   }
 });
 
-// PUT /api/storage-inventory/:id/update-m136
 router.put("/:id/update-m136", async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { qty, status_part, moved_by_name } = req.body;
+    const { qty, status_part, moved_by_name, remark } = req.body;
 
     if (!qty || !status_part) {
       return res.status(400).json({
@@ -329,17 +324,18 @@ router.put("/:id/update-m136", async (req, res) => {
     }
 
     await client.query(
-      `UPDATE storage_inventory 
-       SET qty = $1, 
+      `UPDATE storage_inventory
+       SET qty = $1,
            status_part = $2,
            stock_level = 'M136',
+           remark = COALESCE($4, remark),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $3`,
-      [newQty, newStatus, id]
+      [newQty, newStatus, id, remark !== undefined ? remark : null]
     );
 
     const stockQuery = await client.query(
-      `SELECT stock_m136, stock_hold FROM kanban_master 
+      `SELECT stock_m136, stock_hold FROM kanban_master
        WHERE part_code = $1 AND is_active = true`,
       [partCode]
     );
@@ -355,7 +351,7 @@ router.put("/:id/update-m136", async (req, res) => {
       const newM136Stock = currentM136Stock + qtyDiff;
 
       await client.query(
-        `UPDATE kanban_master 
+        `UPDATE kanban_master
          SET stock_m136 = $1,
              updated_at = CURRENT_TIMESTAMP
          WHERE part_code = $2 AND is_active = true`,
@@ -388,7 +384,7 @@ router.put("/:id/update-m136", async (req, res) => {
       const newHoldStock = currentHoldStock + newQty;
 
       await client.query(
-        `UPDATE kanban_master 
+        `UPDATE kanban_master
          SET stock_m136 = $1,
              stock_hold = $2,
              updated_at = CURRENT_TIMESTAMP
@@ -438,7 +434,7 @@ router.put("/:id/update-m136", async (req, res) => {
       const newM136Stock = currentM136Stock + newQty;
 
       await client.query(
-        `UPDATE kanban_master 
+        `UPDATE kanban_master
          SET stock_hold = $1,
              stock_m136 = $2,
              updated_at = CURRENT_TIMESTAMP

@@ -28,12 +28,14 @@ router.get("/", async (req, res) => {
         ei.emp_name as intransit_by_name,
         TO_CHAR(pe.intransit_at, 'YYYY/MM/DD HH24:MI') as intransit_at,
         ec.emp_name as complete_by_name,
-        TO_CHAR(pe.complete_at, 'YYYY/MM/DD HH24:MI') as complete_at
+        TO_CHAR(pe.complete_at, 'YYYY/MM/DD HH24:MI') as complete_at,
+        si.remark as m136_remark
       FROM parts_enquiry_non_id pe
       LEFT JOIN employees e  ON e.id  = pe.requested_by
       LEFT JOIN employees ea ON ea.id = pe.approved_by
       LEFT JOIN employees ei ON ei.id = pe.intransit_by
       LEFT JOIN employees ec ON ec.id = pe.complete_by
+      LEFT JOIN storage_inventory si ON si.id = pe.storage_inventory_id
       WHERE pe.is_active = true
     `;
 
@@ -607,4 +609,4 @@ router.post("/move-to-complete", async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = router;  

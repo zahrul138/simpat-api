@@ -31,6 +31,8 @@ const storageInventoryRouter = require("./routes/storageInventory");
 const partsEnquiryNonId = require("./routes/partsEnquiryNonId");
 const tripsRouter = require("./routes/trips");
 const activeSessionsRouter = require("./routes/activeSessions");
+const returnPartsRouter = require("./routes/returnParts");
+const rtvParts = require('./routes/rtvParts');
 const formatScheduleDates = require("./middleware/dateFormatter");
 const { startArrivedScheduler } = require("./schedulers/arrivedScheduler");
 
@@ -79,6 +81,8 @@ app.use("/api/storage-inventory", storageInventoryRouter)
 app.use("/api/parts-enquiry-non-id", partsEnquiryNonId);
 app.use("/api/trips", tripsRouter);
 app.use("/api/active-sessions", activeSessionsRouter);
+app.use("/api/return-parts", returnPartsRouter);
+app.use('/api/rtv-parts', rtvParts);
 app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
             
 app.use((req, res) => {

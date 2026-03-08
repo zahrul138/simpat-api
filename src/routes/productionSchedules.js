@@ -1295,6 +1295,22 @@ router.patch("/:id/approve-units", async (req, res) => {
       if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
     }
 
+
+    // Deduct stock_m101 for all active kanban parts
+    if (filledCount > 0) {
+      const partsRes = await client.query(
+        `SELECT id, stock_m101, qty_per_assembly FROM kanban_master
+         WHERE is_active = true AND qty_per_assembly > 0`
+      );
+      for (const part of partsRes.rows) {
+        const deduct = (part.qty_per_assembly || 1) * filledCount;
+        const newStock = Math.max(0, (part.stock_m101 || 0) - deduct);
+        await client.query(
+          `UPDATE kanban_master SET stock_m101 = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          [newStock, part.id]
+        );
+      }
+    }
     await client.query("COMMIT");
 
     return res.json({
@@ -1459,6 +1475,20 @@ router.patch("/:id/approve-single", async (req, res) => {
       `UPDATE public.production_schedules SET actual_input = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
       [singleNewActual, scheduleId]
     );
+
+    // Deduct stock_m101 for all active kanban parts (1 unit)
+    const partsRes = await client.query(
+      `SELECT id, stock_m101, qty_per_assembly FROM kanban_master
+       WHERE is_active = true AND qty_per_assembly > 0`
+    );
+    for (const part of partsRes.rows) {
+      const deduct = part.qty_per_assembly || 1;
+      const newStock = Math.max(0, (part.stock_m101 || 0) - deduct);
+      await client.query(
+        `UPDATE kanban_master SET stock_m101 = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [newStock, part.id]
+      );
+    }
 
     await client.query("COMMIT");
 

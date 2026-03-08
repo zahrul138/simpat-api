@@ -21,6 +21,7 @@ router.get("/by-part-code", async (req, res) => {
         km.kanban_id,
         km.part_code,
         km.part_name,
+        km.model, 
         km.vendor_id,
         km.qty_unit,
         km.qty_box,
@@ -30,7 +31,9 @@ router.get("/by-part-code", async (req, res) => {
         ps.size_name,
         vd.vendor_name,
         vd.vendor_code,
-        vd.types as vendor_type
+        vd.types as vendor_type,
+        km.stock_level_to,
+        COALESCE(km.stock_m101, 0) as stock_m101
       FROM public.kanban_master km
       LEFT JOIN part_sizes ps ON km.size_id = ps.id
       LEFT JOIN vendor_detail vd ON km.vendor_id = vd.id
@@ -260,7 +263,8 @@ router.post("/", async (req, res) => {
 // GET /api/kanban-master/with-details - VERSION 2 (lebih spesifik)
 router.get("/with-details", async (req, res) => {
   try {
-    const { date_from, date_to, vendor_name, part_code, part_name } = req.query;
+    const { date_from, date_to, vendor_name, part_code, part_name, include_inactive } = req.query;
+    const showInactive = include_inactive === "true";
 
     let query = `
       SELECT 
@@ -275,7 +279,7 @@ router.get("/with-details", async (req, res) => {
         km.qty_per_box,
         km.part_price,
         km.part_weight,
-        km.weight_unit,  -- ✅ weight_unit diambil secara eksplisit
+        km.weight_unit,  
         km.customer_special,
         km.model,
         km.vendor_id,
@@ -306,7 +310,7 @@ router.get("/with-details", async (req, res) => {
       LEFT JOIN vendor_detail vd ON km.vendor_id = vd.id
       LEFT JOIN employees e ON km.created_by = e.id
       LEFT JOIN vendor_placement vp ON km.placement_id = vp.id 
-      WHERE km.is_active = true
+      WHERE ${showInactive ? "1=1" : "km.is_active = true"}
     `;
 
     const params = [];
@@ -359,6 +363,40 @@ router.get("/with-details", async (req, res) => {
       message: "Failed to fetch kanban master with details",
       error: error.message,
     });
+  }
+});
+
+// PATCH /api/kanban-master/:id/toggle-active
+router.patch("/:id/toggle-active", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const checkQuery = await pool.query(
+      `SELECT id, part_code, is_active FROM kanban_master WHERE id = $1`,
+      [id]
+    );
+
+    if (checkQuery.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Part not found" });
+    }
+
+    const current = checkQuery.rows[0];
+    const newStatus = !current.is_active;
+
+    await pool.query(
+      `UPDATE kanban_master SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [newStatus, id]
+    );
+
+    return res.json({
+      success: true,
+      message: `Part ${newStatus ? "activated" : "deactivated"} successfully`,
+      is_active: newStatus,
+      part_code: current.part_code,
+    });
+  } catch (err) {
+    console.error(`[PATCH /api/kanban-master/:id/toggle-active] Error:`, err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 
