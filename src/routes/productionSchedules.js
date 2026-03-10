@@ -1224,18 +1224,40 @@ router.patch("/:id/approve-units", async (req, res) => {
       return res.status(400).json({ message: "count must be a positive integer." });
 
     const cur = await client.query(
-      `SELECT total_input, actual_input FROM public.production_schedules WHERE id = $1 AND is_active = true`,
+      `SELECT total_input, actual_input, prod_schedule_code FROM public.production_schedules WHERE id = $1 AND is_active = true`,
       [id]
     );
     if (cur.rowCount === 0)
       return res.status(404).json({ message: "Schedule tidak ditemukan." });
 
-    const totalInput  = Number(cur.rows[0].total_input  || 0);
-    const actualInput = Number(cur.rows[0].actual_input || 0);
+    const totalInput        = Number(cur.rows[0].total_input  || 0);
+    const actualInput       = Number(cur.rows[0].actual_input || 0);
+    const prodScheduleCode  = cur.rows[0].prod_schedule_code || null;
 
     await client.query("BEGIN");
 
     const now = new Date();
+
+    // Build model breakdown dari details
+    const detailsForModel = await client.query(
+      `SELECT d.input_quantity, COALESCE(d.model, 'Veronicas') AS model
+       FROM public.production_schedule_details d
+       WHERE d.production_schedule_id = $1
+       ORDER BY d.sequence_number ASC, d.id ASC`,
+      [id]
+    );
+    let cumModel = 0;
+    const modelBreakdown = detailsForModel.rows.map((r) => {
+      const start = cumModel;
+      cumModel += Number(r.input_quantity || 0);
+      return { model: r.model, start, end: cumModel };
+    });
+    const getModelForUnit = (u) => {
+      for (const b of modelBreakdown) {
+        if (u > b.start && u <= b.end) return b.model;
+      }
+      return modelBreakdown.length > 0 ? modelBreakdown[modelBreakdown.length - 1].model : null;
+    };
 
     // Ambil semua unit yang sudah ada record (approved atau skipped)
     const existingRes = await client.query(
@@ -1250,6 +1272,7 @@ router.patch("/:id/approve-units", async (req, res) => {
     // untuk menentukan titik awal — lalu fill sebanyak count
     let filledCount = 0;
     let nextUnit = 1;
+    const approvedModels = new Set();
     // Lewati unit yang sudah approved (agar tidak double count)
     while (nextUnit <= totalInput && existingMap[nextUnit] === 'approved') nextUnit++;
 
@@ -1258,6 +1281,8 @@ router.patch("/:id/approve-units", async (req, res) => {
       if (existStatus === 'skipped') { nextUnit++; continue; }
       if (existStatus === 'approved') { nextUnit++; continue; }
       // Unit ini Pending — approve
+      const unitModel = getModelForUnit(nextUnit);
+      if (unitModel) approvedModels.add(unitModel);
       await client.query(
         `INSERT INTO public.target_scan_approvals (schedule_id, unit_no, remark, approved_by, approved_at, status)
          VALUES ($1, $2, $3, $4, $5, 'approved')
@@ -1269,6 +1294,7 @@ router.patch("/:id/approve-units", async (req, res) => {
       filledCount++;
       nextUnit++;
     }
+    const approvedModelStr = approvedModels.size > 0 ? [...approvedModels].join(', ') : null;
 
     // Hitung ulang actual_input = hanya unit berstatus approved
     const approvedCountRes = await client.query(
@@ -1286,6 +1312,7 @@ router.patch("/:id/approve-units", async (req, res) => {
       [updatedActual, id]
     );
 
+    // Resolve approvedByName inside transaction
     let approvedByName = null;
     if (approvedById) {
       const empRes = await client.query(
@@ -1295,19 +1322,38 @@ router.patch("/:id/approve-units", async (req, res) => {
       if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
     }
 
-
-    // Deduct stock_m101 for all active kanban parts
+    // Deduct stock_m101 + insert stock_movements record per part
     if (filledCount > 0) {
       const partsRes = await client.query(
-        `SELECT id, stock_m101, qty_per_assembly FROM kanban_master
+        `SELECT id, part_code, part_name, stock_m101, qty_per_assembly FROM kanban_master
          WHERE is_active = true AND qty_per_assembly > 0`
       );
       for (const part of partsRes.rows) {
-        const deduct = (part.qty_per_assembly || 1) * filledCount;
+        const deduct   = (part.qty_per_assembly || 1) * filledCount;
         const newStock = Math.max(0, (part.stock_m101 || 0) - deduct);
         await client.query(
           `UPDATE kanban_master SET stock_m101 = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
           [newStock, part.id]
+        );
+        // Insert 1 movement record per part (gabungan semua unit yang di-approve)
+        await client.query(
+          `INSERT INTO stock_movements (
+             part_id, part_code, part_name, movement_type, stock_level,
+             quantity, quantity_before, quantity_after,
+             source_type, source_reference, model, remark,
+             moved_by, moved_by_name, moved_at
+           ) VALUES ($1,$2,$3,'OUT','M101',$4,$5,$6,'finish_good',$7,$8,$9,$10,$11,CURRENT_TIMESTAMP)`,
+          [
+            part.id, part.part_code, part.part_name,
+            deduct,
+            part.stock_m101,
+            newStock,
+            prodScheduleCode,
+            approvedModelStr,
+            remark || '-',
+            approvedById || null,
+            approvedByName || null,
+          ]
         );
       }
     }
@@ -1427,7 +1473,7 @@ router.patch("/:id/approve-single", async (req, res) => {
 
     // Ambil customer dari breakdown
     const detailRes = await client.query(
-      `SELECT c.cust_name, d.input_quantity
+      `SELECT c.cust_name, d.input_quantity, COALESCE(d.model, 'Veronicas') AS model
        FROM public.production_schedule_details d
        LEFT JOIN public.customers c ON c.id = d.customer_id
        WHERE d.production_schedule_id = $1
@@ -1438,7 +1484,7 @@ router.patch("/:id/approve-single", async (req, res) => {
     const breakdown = detailRes.rows.map((row) => {
       const start = cumulative;
       cumulative += Number(row.input_quantity || 0);
-      return { cust_name: row.cust_name, start, end: cumulative };
+      return { cust_name: row.cust_name, model: row.model || 'Veronicas', start, end: cumulative };
     });
     const getCustomer = (u) => {
       for (const b of breakdown) {
@@ -1446,9 +1492,16 @@ router.patch("/:id/approve-single", async (req, res) => {
       }
       return breakdown.length > 0 ? breakdown[breakdown.length - 1].cust_name || null : null;
     };
+    const getModel = (u) => {
+      for (const b of breakdown) {
+        if (u > b.start && u <= b.end) return b.model;
+      }
+      return breakdown.length > 0 ? breakdown[breakdown.length - 1].model : null;
+    };
 
     const now = new Date();
-    const customer = getCustomer(Number(unit_no));
+    const customer   = getCustomer(Number(unit_no));
+    const unitModel  = getModel(Number(unit_no));
 
     await client.query("BEGIN");
 
@@ -1476,22 +1529,7 @@ router.patch("/:id/approve-single", async (req, res) => {
       [singleNewActual, scheduleId]
     );
 
-    // Deduct stock_m101 for all active kanban parts (1 unit)
-    const partsRes = await client.query(
-      `SELECT id, stock_m101, qty_per_assembly FROM kanban_master
-       WHERE is_active = true AND qty_per_assembly > 0`
-    );
-    for (const part of partsRes.rows) {
-      const deduct = part.qty_per_assembly || 1;
-      const newStock = Math.max(0, (part.stock_m101 || 0) - deduct);
-      await client.query(
-        `UPDATE kanban_master SET stock_m101 = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-        [newStock, part.id]
-      );
-    }
-
-    await client.query("COMMIT");
-
+    // Resolve approvedByName inside transaction
     let approvedByName = null;
     if (approved_by_id) {
       const empRes = await client.query(
@@ -1500,6 +1538,51 @@ router.patch("/:id/approve-single", async (req, res) => {
       );
       if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
     }
+
+    // Deduct stock_m101 + insert stock_movements record per part (1 unit)
+    const partsRes = await client.query(
+      `SELECT id, part_code, part_name, stock_m101, qty_per_assembly FROM kanban_master
+       WHERE is_active = true AND qty_per_assembly > 0`
+    );
+
+    // Get schedule code for reference
+    const schedCodeRes = await client.query(
+      `SELECT prod_schedule_code FROM public.production_schedules WHERE id = $1 LIMIT 1`,
+      [scheduleId]
+    );
+    const scheduleCode = schedCodeRes.rows[0]?.prod_schedule_code || null;
+
+    for (const part of partsRes.rows) {
+      const deduct   = part.qty_per_assembly || 1;
+      const newStock = Math.max(0, (part.stock_m101 || 0) - deduct);
+      await client.query(
+        `UPDATE kanban_master SET stock_m101 = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [newStock, part.id]
+      );
+      // Insert 1 movement record per part untuk 1 unit
+      await client.query(
+        `INSERT INTO stock_movements (
+           part_id, part_code, part_name, movement_type, stock_level,
+           quantity, quantity_before, quantity_after,
+           source_type, source_reference, model, remark,
+           moved_by, moved_by_name, moved_at
+         ) VALUES ($1,$2,$3,'OUT','M101',$4,$5,$6,'finish_good',$7,$8,$9,$10,$11,CURRENT_TIMESTAMP)`,
+        [
+          part.id, part.part_code, part.part_name,
+          deduct,
+          part.stock_m101,
+          newStock,
+          scheduleCode,
+          unitModel || null,
+          remark || '-',
+          approved_by_id || null,
+          approvedByName || null,
+        ]
+      );
+    }
+
+    await client.query("COMMIT");
+
 
     return res.json({
       message: `Unit ${unit_no} berhasil di-approve`,

@@ -4,7 +4,6 @@ const auth = require('../middleware/auth');
 
 const router = express.Router();
 
-/** utils */
 const getDeptIdByCode = async (client, deptCode) => {
   const { rows } = await client.query('SELECT id FROM departments WHERE dept_code = $1 LIMIT 1', [deptCode]);
   if (!rows[0]) throw new Error(`Invalid department code: ${deptCode}`);
@@ -17,10 +16,6 @@ const pickCreatorName = (createdByFromBody, reqUser) =>
   reqUser?.name ||
   'SYSTEM';
 
-/**
- * GET /users
- * list users
- */
 router.get('/', auth(), async (req, res) => {
   try {
     const q = `
@@ -52,10 +47,6 @@ router.get('/', auth(), async (req, res) => {
   }
 });
 
-/**
- * GET /users/:id
- * detail user
- */
 router.get('/:id', auth(), async (req, res) => {
   const { id } = req.params;
   try {
@@ -88,17 +79,11 @@ router.get('/:id', auth(), async (req, res) => {
   }
 });
 
-/**
- * POST /users
- * single create
- * body: { idCard, name, username, password, department, role?, status?, createdBy? }
- */
 router.post('/', auth(), async (req, res) => {
   const { idCard, name, username, password, department, role = 'User', status = 'Active', createdBy } = req.body || {};
   if (!idCard || !name || !username || !password || !department)
     return res.status(400).json({ error: 'Missing fields' });
 
-  // validasi 7 digit utk safety
   if (String(idCard).length !== 7 || /\D/.test(String(idCard))) {
     return res.status(400).json({ error: 'idCard must be exactly 7 digits' });
   }
@@ -132,11 +117,6 @@ router.post('/', auth(), async (req, res) => {
   }
 });
 
-/**
- * POST /users/bulk
- * bulk create
- * body: { users: [{ idCard, name, username, password, department, role?, status?, createdBy? }, ...] }
- */
 router.post('/bulk', auth(), async (req, res) => {
   const { users } = req.body || {};
   if (!Array.isArray(users) || users.length === 0) return res.status(400).json({ error: 'No users' });
@@ -149,17 +129,14 @@ router.post('/bulk', auth(), async (req, res) => {
     for (const u of users) {
       const { idCard, name, username, password, department, role = 'User', status = 'Active', createdBy } = u || {};
 
-      // skip jika field penting kosong
       if (!idCard || !name || !username || !password || !department) continue;
-      // validasi 7 digit
       if (String(idCard).length !== 7 || /\D/.test(String(idCard))) continue;
 
-      // dapatkan dept id
       let deptId;
       try {
         deptId = await getDeptIdByCode(client, department);
       } catch {
-        continue; // skip invalid department
+        continue; 
       }
 
       const creator = pickCreatorName(createdBy, req.user);
@@ -193,11 +170,6 @@ router.post('/bulk', auth(), async (req, res) => {
   }
 });
 
-/**
- * PUT /users/:id
- * update partial
- * body boleh kirim sebagian field
- */
 router.put('/:id', auth(), async (req, res) => {
   const { id } = req.params;
   const { idCard, name, username, password, department, role, status } = req.body || {};
@@ -206,7 +178,6 @@ router.put('/:id', auth(), async (req, res) => {
       ? await pool.query('SELECT id FROM departments WHERE dept_code = $1', [department])
       : null;
 
-    // validasi idCard jika dikirim
     if (idCard !== undefined) {
       if (String(idCard).length !== 7 || /\D/.test(String(idCard))) {
         return res.status(400).json({ error: 'idCard must be exactly 7 digits' });
@@ -246,9 +217,6 @@ router.put('/:id', auth(), async (req, res) => {
   }
 });
 
-/**
- * DELETE /users/:id
- */
 router.delete('/:id', auth(), async (req, res) => {
   const { id } = req.params;
   await pool.query('DELETE FROM employees WHERE id = $1', [id]);

@@ -29,21 +29,6 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "Missing fields" });
     }
 
-    // Validasi schedule date tidak duplikat di database
-    const existingSchedule = await client.query(
-      `SELECT id, schedule_code FROM local_schedules 
-       WHERE schedule_date = $1::date AND is_active = true 
-       LIMIT 1`,
-      [scheduleDate],
-    );
-
-    if (existingSchedule.rowCount > 0) {
-      return res.status(409).json({
-        message: "Schedule date already exists in database",
-        existingSchedule: existingSchedule.rows[0],
-      });
-    }
-
     await client.query("BEGIN");
 
     const uploadBy = await resolveEmployeeId(client, uploadByName);

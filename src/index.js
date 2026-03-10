@@ -1,21 +1,15 @@
-// src/index.js
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
-
-
-// bikin koneksi DB di awal biar kelihatan log "Connected"
 require("./db");
 
-// ====== Routes ======
 const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/users");
 const deptRoutes = require("./routes/departments");
 const customersRoutes = require("./routes/customers");
 const productionSchedulesRoutes = require("./routes/productionSchedules");
 
-// NEW: routes yang tadi bikin 404
 const localSchedulesRoutes = require("./routes/localSchedules");
 const localScheduleVendorsRoutes = require("./routes/localScheduleVendors");
 const localSchedulePartsRoutes = require("./routes/localScheduleParts");
@@ -33,6 +27,7 @@ const tripsRouter = require("./routes/trips");
 const activeSessionsRouter = require("./routes/activeSessions");
 const returnPartsRouter = require("./routes/returnParts");
 const rtvParts = require('./routes/rtvParts');
+const userFeedbacksRouter = require('./routes/userFeedbacks');
 const formatScheduleDates = require("./middleware/dateFormatter");
 const { startArrivedScheduler } = require("./schedulers/arrivedScheduler");
 
@@ -52,8 +47,8 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use(morgan("dev", {
   skip: (req) => req.originalUrl.startsWith("/api/active-sessions"),
 }));
@@ -83,6 +78,7 @@ app.use("/api/trips", tripsRouter);
 app.use("/api/active-sessions", activeSessionsRouter);
 app.use("/api/return-parts", returnPartsRouter);
 app.use('/api/rtv-parts', rtvParts);
+app.use('/user-feedbacks', userFeedbacksRouter);
 app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
             
 app.use((req, res) => {
