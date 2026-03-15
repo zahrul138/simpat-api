@@ -28,6 +28,9 @@ const activeSessionsRouter = require("./routes/activeSessions");
 const returnPartsRouter = require("./routes/returnParts");
 const rtvParts = require('./routes/rtvParts');
 const userFeedbacksRouter = require('./routes/userFeedbacks');
+const disposalReport       = require("./routes/disposalReport");
+const activityLogsRouter   = require('./routes/activityLogs');
+const adminDashboardRouter = require('./routes/adminDashboard');
 const formatScheduleDates = require("./middleware/dateFormatter");
 const { startArrivedScheduler } = require("./schedulers/arrivedScheduler");
 
@@ -79,6 +82,9 @@ app.use("/api/active-sessions", activeSessionsRouter);
 app.use("/api/return-parts", returnPartsRouter);
 app.use('/api/rtv-parts', rtvParts);
 app.use('/user-feedbacks', userFeedbacksRouter);
+app.use("/api/disposal-report",  disposalReport);
+app.use("/api/activity-logs",    activityLogsRouter);
+app.use("/api/admin-dashboard",  adminDashboardRouter);
 app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
             
 app.use((req, res) => {

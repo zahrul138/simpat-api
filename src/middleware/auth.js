@@ -1,7 +1,8 @@
 const jwt = require('jsonwebtoken');
+const pool = require('../db');
 
 module.exports = function auth(required = true) {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : null;
 
@@ -10,12 +11,28 @@ module.exports = function auth(required = true) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    let payload;
     try {
-      const payload = jwt.verify(token, process.env.JWT_SECRET);
-      req.user = payload;
-      next();
+      payload = jwt.verify(token, process.env.JWT_SECRET);
     } catch (e) {
       return res.status(401).json({ error: 'Invalid token' });
     }
+
+    // ── Cek is_active di database ──
+    try {
+      const { rows } = await pool.query(
+        'SELECT is_active FROM employees WHERE id = $1 LIMIT 1',
+        [payload.id]
+      );
+      if (!rows[0] || !rows[0].is_active) {
+        return res.status(401).json({ error: 'Akun tidak aktif' });
+      }
+    } catch (e) {
+      console.error('[auth middleware] DB check error:', e);
+      return res.status(500).json({ error: 'Server error' });
+    }
+
+    req.user = payload;
+    next();
   };
 };

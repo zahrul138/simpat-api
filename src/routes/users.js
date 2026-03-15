@@ -4,6 +4,15 @@ const auth = require('../middleware/auth');
 
 const router = express.Router();
 
+const writeLog = async ({ empId, empName, action, targetId, targetName, description }) => {
+  try {
+    await pool.query(
+      `INSERT INTO activity_logs (emp_id, emp_name, action, target_id, target_name, description) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [empId || null, empName || 'SYSTEM', action, targetId || null, targetName || null, description || null]
+    );
+  } catch (e) { console.error('[writeLog]', e.message); }
+};
+
 const getDeptIdByCode = async (client, deptCode) => {
   const { rows } = await client.query('SELECT id FROM departments WHERE dept_code = $1 LIMIT 1', [deptCode]);
   if (!rows[0]) throw new Error(`Invalid department code: ${deptCode}`);
@@ -37,8 +46,9 @@ router.get('/', auth(), async (req, res) => {
       role: r.emp_role,
       status: r.is_active ? 'Active' : 'Inactive',
       dept_app: r.dept_app,
-      createdBy: r.created_by || 'SYSTEM',       
-      createdDate: r.created_at                  
+      createdBy: r.created_by || 'SYSTEM',
+      createdDate: r.created_at,
+      updatedAt: r.updated_at
     }));
     res.json(formatted);
   } catch (e) {
@@ -70,8 +80,9 @@ router.get('/:id', auth(), async (req, res) => {
       role: u.emp_role,
       status: u.is_active ? 'Active' : 'Inactive',
       dept_app: u.dept_app,
-      createdBy: u.created_by || 'SYSTEM',     
-      createdDate: u.created_at
+      createdBy: u.created_by || 'SYSTEM',
+      createdDate: u.created_at,
+      updatedAt: u.updated_at
     });
   } catch (e) {
     console.error(e);
@@ -109,7 +120,9 @@ router.post('/', auth(), async (req, res) => {
       boolFromStatus(status),
       creator                  
     ]);
-    res.status(201).json({ id: rows[0].id });
+    const newId = rows[0].id;
+    await writeLog({ empId: req.user?.id, empName: req.user?.emp_name || creator, action: 'CREATE_USER', targetId: newId, targetName: name, description: `Created user "${username}" (${department})` });
+    res.status(201).json({ id: newId });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'emp_id or username already exists' });
     console.error(e);
@@ -209,6 +222,11 @@ router.put('/:id', auth(), async (req, res) => {
     ]);
 
     if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    let action = 'UPDATE_USER';
+    let desc   = `Updated user ID ${id}`;
+    if (status === 'Active')   { action = 'ACTIVATE_USER';   desc = `Activated user ID ${id}`; }
+    if (status === 'Inactive') { action = 'DEACTIVATE_USER'; desc = `Deactivated user ID ${id}`; }
+    await writeLog({ empId: req.user?.id, empName: req.user?.emp_name || 'SYSTEM', action, targetId: parseInt(id), description: desc });
     res.json({ ok: true });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Duplicate emp_id/username' });
@@ -219,8 +237,15 @@ router.put('/:id', auth(), async (req, res) => {
 
 router.delete('/:id', auth(), async (req, res) => {
   const { id } = req.params;
-  await pool.query('DELETE FROM employees WHERE id = $1', [id]);
-  res.json({ ok: true });
+  try {
+    const { rows: emp } = await pool.query('SELECT emp_name, username FROM employees WHERE id = $1', [id]);
+    await pool.query('DELETE FROM employees WHERE id = $1', [id]);
+    await writeLog({ empId: req.user?.id, empName: req.user?.emp_name || 'SYSTEM', action: 'DELETE_USER', targetId: parseInt(id), targetName: emp[0]?.emp_name || null, description: `Deleted user "${emp[0]?.username || id}"` });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 module.exports = router;
