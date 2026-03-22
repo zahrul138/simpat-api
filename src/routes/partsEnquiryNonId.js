@@ -296,6 +296,7 @@ router.post("/approve", async (req, res) => {
   const client = await pool.connect();
   try {
     const { ids, approved_by_name } = req.body;
+    console.log("[Approve] ids:", ids, "| approved_by_name:", approved_by_name);
 
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ success: false, message: "No items selected" });
@@ -361,9 +362,12 @@ router.post("/approve", async (req, res) => {
         [part_code]
       );
 
+      console.log(`[Approve] part_code: ${part_code} | storage_inventory_id: ${storage_inventory_id} | qty: ${qty} | kanban rows found: ${stockQuery.rows.length}`);
+
       if (stockQuery.rows.length === 0) {
         // Jika part tidak ditemukan di kanban_master, rollback
         await client.query("ROLLBACK");
+        console.log(`[Approve] 400 - part_code ${part_code} not found in kanban_master`);
         return res.status(404).json({
           success: false,
           message: `Part code ${part_code} not found in kanban_master`
@@ -373,6 +377,8 @@ router.post("/approve", async (req, res) => {
       const kanban = stockQuery.rows[0];
       const currentM136 = parseInt(kanban.stock_m136) || 0;
       const currentM101 = parseInt(kanban.stock_m101) || 0;
+
+      console.log(`[Approve] kanban id: ${kanban.id} | M136: ${currentM136} | M101: ${currentM101} | qty needed: ${qty}`);
       const kanbanId = kanban.id;
 
       // Cek kecukupan stok M136
@@ -609,4 +615,4 @@ router.post("/move-to-complete", async (req, res) => {
   }
 });
 
-module.exports = router;  
+module.exports = router;

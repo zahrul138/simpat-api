@@ -203,8 +203,19 @@ router.get("/", async (req, res) => {
           [schedule.id],
         );
 
-        // Filter vendor berdasarkan nama jika ada filter
+        // Filter vendor by tab status:
+        // Today tab: exclude vendor yang sudah dipindah ke tab lain
+        // (Received, IQC Progress, Sample, Complete)
+        // New dan Schedule: tampilkan semua vendor
+        const mappedStatus = statusMapping[status];
+        const movedStatuses = ['Received', 'IQC Progress', 'Sample', 'Complete'];
         let filteredVendors = vendorsResult.rows;
+        if (mappedStatus === 'Today') {
+          filteredVendors = filteredVendors.filter(
+            (v) => !movedStatuses.includes(v.vendor_status),
+          );
+        }
+        // Filter vendor berdasarkan nama jika ada filter
         if (vendor_name) {
           filteredVendors = filteredVendors.filter(
             (vendor) =>
@@ -1223,7 +1234,7 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Vendor not found",
+        message: "Schedule not found",
       });
     }
 
@@ -1312,7 +1323,7 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
 
     res.json({
       success: true,
-      message: `Vendor status updated to ${status}`,
+      message: `Schedule status updated to ${status}`,
       data: {
         vendor: vendorResult.rows[0],
         scheduleId: scheduleId,
@@ -1324,7 +1335,7 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
     console.error("[UPDATE Vendor Status] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update vendor status",
+      message: "Failed to update schedule status",
       error: error.message,
     });
   } finally {
@@ -1365,7 +1376,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     if (vendorCheck.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res.status(404).json({ success: false, message: "Schedule not found" });
     }
 
     const vendor = vendorCheck.rows[0];
@@ -1787,7 +1798,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     res.json({
       success: true,
       message: allPartsPass
-        ? "Vendor approved — no sampling needed, moved directly to Pass"
+        ? "Schedule approved — no sampling needed, moved directly to Pass"
         : "Vendor approved — parts with incomplete prod_dates moved to IQC Progress",
       data: {
         vendor: vendorResult.rows[0],
@@ -1803,7 +1814,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     console.error("[APPROVE Vendor] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to approve vendor",
+      message: "Failed to approve schedule",
       error: error.message,
     });
   } finally {
@@ -1834,7 +1845,7 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Vendor not found",
+        message: "Schedule not found",
       });
     }
 
@@ -1892,7 +1903,7 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Vendor moved to Sample",
+      message: "Schedule moved to Sample",
       data: {
         vendor: vendorResult.rows[0],
         scheduleId: scheduleId,
@@ -1903,7 +1914,7 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
     console.error("[MOVE TO SAMPLE] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to move vendor to Sample",
+      message: "Failed to move schedule to Sample",
       error: error.message,
     });
   } finally {
@@ -2052,7 +2063,7 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Vendor not found",
+        message: "Schedule not found",
       });
     }
 
@@ -2110,7 +2121,7 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Vendor moved to Complete",
+      message: "Schedule moved to Complete",
       data: {
         vendor: vendorResult.rows[0],
         scheduleId: scheduleId,
@@ -2121,7 +2132,7 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
     console.error("[MOVE TO COMPLETE] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to move vendor to Complete",
+      message: "Failed to move schedule to Complete",
       error: error.message,
     });
   } finally {
@@ -2151,7 +2162,7 @@ router.put("/vendors/:vendorId/return", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Vendor not found",
+        message: "Schedule not found",
       });
     }
 
@@ -2186,7 +2197,7 @@ router.put("/vendors/:vendorId/return", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Vendor returned to Today tab",
+      message: "Schedule returned to Today tab",
       data: {
         vendor: vendorResult.rows[0],
         scheduleId: scheduleId,
@@ -2197,7 +2208,7 @@ router.put("/vendors/:vendorId/return", async (req, res) => {
     console.error("[RETURN Vendor] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to return vendor",
+      message: "Failed to return schedule",
       error: error.message,
     });
   } finally {
@@ -2227,7 +2238,7 @@ router.put("/vendors/:vendorId/return-to-iqc", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Vendor not found",
+        message: "Schedule not found",
       });
     }
 
@@ -2262,7 +2273,7 @@ router.put("/vendors/:vendorId/return-to-iqc", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Vendor returned to IQC Progress tab",
+      message: "Schedule returned to IQC Progress tab",
       data: {
         vendor: vendorResult.rows[0],
         scheduleId: scheduleId,
@@ -2273,7 +2284,7 @@ router.put("/vendors/:vendorId/return-to-iqc", async (req, res) => {
     console.error("[RETURN to IQC] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to return vendor to IQC Progress",
+      message: "Failed to return schedule to IQC Progress",
       error: error.message,
     });
   } finally {
@@ -2445,7 +2456,7 @@ router.post("/:scheduleId/vendors", async (req, res) => {
     if (!trip_id || !vendor_id || !do_numbers) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: trip_id, vendor_id, do_numbers",
+        message: "Missing required fields: trip_id, schedule_id, do_numbers",
       });
     }
 
@@ -2510,7 +2521,7 @@ router.post("/:scheduleId/vendors", async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Vendor added successfully",
+      message: "Schedule added successfully",
       data: result.rows[0],
     });
   } catch (error) {
@@ -2518,7 +2529,7 @@ router.post("/:scheduleId/vendors", async (req, res) => {
     console.error("[ADD Vendor] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to add vendor",
+      message: "Failed to add schedule",
       error: error.message,
     });
   } finally {
@@ -2562,7 +2573,7 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Vendor not found",
+        message: "Schedule not found",
       });
     }
 
@@ -2638,6 +2649,166 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
       message: "Failed to add part",
       error: error.message,
     });
+  } finally {
+    client.release();
+  }
+});
+
+
+// ====== BULK ADD VENDORS to schedule (used by AddLocalSchedulePage) ======
+router.post("/:scheduleId/vendors/bulk", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { scheduleId } = req.params;
+    const { items } = req.body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: "items array is required" });
+    }
+
+    await client.query("BEGIN");
+
+    const scheduleCheck = await client.query(
+      `SELECT id, schedule_date, stock_level, model_name FROM local_schedules WHERE id = $1 AND is_active = true`,
+      [scheduleId]
+    );
+
+    if (scheduleCheck.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, message: "Schedule not found" });
+    }
+
+    const insertedVendors = [];
+
+    for (const item of items) {
+      const { trip_id, vendor_id, do_numbers } = item;
+      if (!trip_id || !vendor_id) continue;
+
+      const tripCheck = await client.query(
+        `SELECT id, arv_to FROM trips WHERE id = $1`,
+        [trip_id]
+      );
+      const arrivalTime = tripCheck.rows[0]?.arv_to || null;
+      const doJoined = Array.isArray(do_numbers) ? do_numbers.join(" | ") : (do_numbers || "");
+
+      const result = await client.query(
+        `INSERT INTO local_schedule_vendors
+         (local_schedule_id, trip_id, vendor_id, do_numbers, arrival_time, total_pallet, total_item)
+         VALUES ($1, $2, $3, $4, $5, 0, 0)
+         RETURNING id, local_schedule_id, trip_id, vendor_id, do_numbers, arrival_time`,
+        [scheduleId, trip_id, vendor_id, doJoined, arrivalTime]
+      );
+
+      insertedVendors.push(result.rows[0]);
+    }
+
+    await client.query(
+      `UPDATE local_schedules
+       SET total_vendor = (
+         SELECT COUNT(*) FROM local_schedule_vendors WHERE local_schedule_id = $1 AND is_active = true
+       ),
+       updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [scheduleId]
+    );
+
+    await client.query("COMMIT");
+
+    res.status(201).json({
+      success: true,
+      message: `${insertedVendors.length} vendors added successfully`,
+      vendors: insertedVendors,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[BULK ADD Vendors] Error:", error);
+    res.status(500).json({ success: false, message: "Failed to add vendors", error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ====== BULK ADD PARTS to vendor (used by AddLocalSchedulePage) ======
+router.post("/:vendorId/parts/bulk", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { vendorId } = req.params;
+    const { items } = req.body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: "items array is required" });
+    }
+
+    await client.query("BEGIN");
+
+    const vendorCheck = await client.query(
+      `SELECT id, local_schedule_id FROM local_schedule_vendors WHERE id = $1 AND is_active = true`,
+      [vendorId]
+    );
+
+    if (vendorCheck.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    const scheduleId = vendorCheck.rows[0].local_schedule_id;
+    const insertedParts = [];
+
+    for (const item of items) {
+      const { part_code, part_name, qty, qty_box, unit, do_number } = item;
+      if (!part_code) continue;
+
+      const partRes = await client.query(
+        `SELECT id FROM kanban_master WHERE part_code = $1 AND is_active = true LIMIT 1`,
+        [part_code.trim()]
+      );
+      const partId = partRes.rows[0]?.id || null;
+
+      const result = await client.query(
+        `INSERT INTO local_schedule_parts
+         (local_schedule_vendor_id, part_id, part_code, part_name, quantity, quantity_box, unit, do_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, part_code, part_name, quantity as qty, quantity_box as qty_box, unit`,
+        [vendorId, partId, part_code, part_name || "", Number(qty) || 0, Number(qty_box) || 0, unit || "PCS", do_number || ""]
+      );
+
+      insertedParts.push(result.rows[0]);
+    }
+
+    await client.query(
+      `UPDATE local_schedule_vendors
+       SET total_item = (
+         SELECT COUNT(*) FROM local_schedule_parts WHERE local_schedule_vendor_id = $1 AND is_active = true
+       ),
+       updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [vendorId]
+    );
+
+    await client.query(
+      `UPDATE local_schedules
+       SET total_item = (
+         SELECT COUNT(*)
+         FROM local_schedule_parts lsp
+         JOIN local_schedule_vendors lsv ON lsp.local_schedule_vendor_id = lsv.id
+         WHERE lsv.local_schedule_id = $1 AND lsp.is_active = true
+       ),
+       updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [scheduleId]
+    );
+
+    await client.query("COMMIT");
+
+    res.status(201).json({
+      success: true,
+      message: `${insertedParts.length} parts added successfully`,
+      parts: insertedParts,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[BULK ADD Parts] Error:", error);
+    res.status(500).json({ success: false, message: "Failed to add parts", error: error.message });
   } finally {
     client.release();
   }
@@ -2770,7 +2941,7 @@ router.delete("/vendors/:vendorId", async (req, res) => {
       console.log(`[DELETE Vendor] Vendor ${vendorId} not found`);
       return res.status(404).json({
         success: false,
-        message: "Vendor not found or already deleted",
+        message: "Schedule not found or already deleted",
       });
     }
 
@@ -2828,7 +2999,7 @@ router.delete("/vendors/:vendorId", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Vendor and all related parts deleted successfully",
+      message: "Schedule and all related parts deleted successfully",
       data: {
         deletedVendorId: vendorId,
         deletedParts: deletedParts,
@@ -2840,7 +3011,7 @@ router.delete("/vendors/:vendorId", async (req, res) => {
     console.error("[DELETE Vendor] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to delete vendor",
+      message: "Failed to delete schedule",
       error: error.message,
     });
   } finally {
@@ -2974,7 +3145,7 @@ router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Vendor not found in this schedule",
+        message: "Schedule not found in this schedule",
       });
     }
 
@@ -3018,7 +3189,7 @@ router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Vendor and all parts deleted successfully",
+      message: "Schedule and all parts deleted successfully",
       data: {
         vendorId: vendorId,
         deletedParts: deletedParts,
@@ -3029,7 +3200,7 @@ router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
     console.error("[DELETE Vendor Alt] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to delete vendor",
+      message: "Failed to delete schedule",
       error: error.message,
     });
   } finally {
@@ -3060,7 +3231,7 @@ router.delete("/vendors/:vendorId/parts/:partId", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Part not found in this vendor",
+        message: "Part not found in this schedule",
       });
     }
 

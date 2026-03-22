@@ -1,9 +1,8 @@
-// routes/qcChecks.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-// Helper: Cari employee ID dari nama
+
 const resolveEmployeeId = async (empName) => {
   if (!empName) return null;
   try {
@@ -20,7 +19,7 @@ const resolveEmployeeId = async (empName) => {
   }
 };
 
-// ====== GET all QC Checks ======
+
 router.get("/", async (req, res) => {
   try {
     const { status, part_code, date_from, date_to, data_from } = req.query;
@@ -105,7 +104,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ====== CREATE QC Check ======
+
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -118,9 +117,9 @@ router.post("/", async (req, res) => {
       status = "Pending",
       approved_by_name,
       created_by_name,
-      source_vendor_id,  // For auto-move to Pass
-      source_part_id,    // For reference
-      isLastQcCheck = false,  // NEW: Flag from frontend
+      source_vendor_id,
+      source_part_id,
+      isLastQcCheck = false,
     } = req.body;
 
     console.log(`[QC CREATE] ${part_code} - ${production_date} (vendor_id: ${source_vendor_id}, isLastQcCheck: ${isLastQcCheck})`);
@@ -134,7 +133,7 @@ router.post("/", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Check duplicate
+
     const existingCheck = await client.query(
       `SELECT id FROM qc_checks 
        WHERE part_code = $1 
@@ -154,7 +153,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Cari ID employee jika ada namanya
+
     let approvedById = null;
     if (approved_by_name) {
       approvedById = await resolveEmployeeId(approved_by_name);
@@ -203,82 +202,6 @@ router.post("/", async (req, res) => {
 
     let vendorMovedToPass = false;
 
-    // AUTO-CHECK: If this is the last QC check for vendor, move to Pass
-    if (data_from === 'M136' && status === 'Complete' && source_vendor_id && isLastQcCheck) {
-      console.log(`[QC CREATE] Last QC check for vendor ${source_vendor_id}! Moving to Pass`);
-
-      try {
-        // Recalculate total_pallet before moving
-        const palletCalc = await client.query(
-          `SELECT COALESCE(SUM(quantity_box), 0) as total_boxes
-           FROM oversea_schedule_parts
-           WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-          [source_vendor_id]
-        );
-
-        const totalPallet = parseInt(palletCalc.rows[0]?.total_boxes) || 0;
-
-        // Update vendor status AND total_pallet AND set sample timestamp
-        await client.query(
-          `UPDATE oversea_schedule_vendors 
-           SET vendor_status = 'Sample',
-              sample_by = $2,              
-              sample_at = CURRENT_TIMESTAMP,
-              updated_at = CURRENT_TIMESTAMP 
-           WHERE id = $1 AND is_active = true`,
-          [source_vendor_id, approvedById]  
-        );
-
-        console.log(`[QC CREATE] Vendor ${source_vendor_id} moved to Pass with total_pallet=${totalPallet}`);
-
-        // Check if should update schedule status
-        const vendorInfo = await client.query(
-          `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
-          [source_vendor_id]
-        );
-
-        if (vendorInfo.rowCount > 0) {
-          const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
-
-          const allVendorsCheck = await client.query(
-            `SELECT COUNT(*) as total, 
-                      SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as sample_count
-               FROM oversea_schedule_vendors 
-               WHERE oversea_schedule_id = $1 AND is_active = true`,
-            [scheduleId]
-          );
-
-          const { total, sample_count } = allVendorsCheck.rows[0];
-          if (parseInt(total) > 0 && parseInt(total) === parseInt(sample_count)) {
-            // Recalculate schedule total_pallet (sum of all vendors)
-            const schedulePalletCalc = await client.query(
-              `SELECT COALESCE(SUM(total_pallet), 0) as total_pallets
-                 FROM oversea_schedule_vendors
-                 WHERE oversea_schedule_id = $1 AND is_active = true`,
-              [scheduleId]
-            );
-
-            const scheduleTotalPallet = parseInt(schedulePalletCalc.rows[0]?.total_pallets) || 0;
-
-            await client.query(
-              `UPDATE oversea_schedules 
-                 SET status = 'Sample',
-                     total_pallet = $2,
-                     updated_at = CURRENT_TIMESTAMP 
-                 WHERE id = $1 AND is_active = true`,
-              [scheduleId, scheduleTotalPallet]
-            );
-            console.log(`[QC CREATE] Schedule ${scheduleId} moved to Sample with total_pallet=${scheduleTotalPallet}`);
-          }
-        }
-
-        vendorMovedToPass = true;
-      } catch (autoMoveError) {
-        console.error(`[QC CREATE] Error auto-moving vendor:`, autoMoveError.message);
-        // Don't rollback, just log
-      }
-    }
-
     await client.query("COMMIT");
 
     console.log(`[QC CREATE] Success: ID ${result.rows[0].id}${vendorMovedToPass ? ' (Vendor moved to Pass)' : ''}`);
@@ -302,13 +225,103 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ====== HELPER: Auto-move local vendor to Pass if all M101 QC checks approved ======
-// Mirror dari checkAndMoveVendorToPassIfAllApproved di overseaSchedules.js
+
+const checkAndMoveOverseaVendorToPassIfAllApproved = async (client, vendorId, approvedById) => {
+  try {
+    console.log(`[checkAndMoveOverseaVendor] Checking vendor ${vendorId}`);
+
+    const totalChecksResult = await client.query(
+      `SELECT COUNT(*) as total
+       FROM qc_checks
+       WHERE source_vendor_id = $1
+         AND data_from = 'M136'
+         AND is_active = true`,
+      [vendorId]
+    );
+    const totalChecks = parseInt(totalChecksResult.rows[0].total) || 0;
+
+    if (totalChecks === 0) {
+      console.log(`[checkAndMoveOverseaVendor] No M136 QC checks found for vendor ${vendorId}`);
+      return false;
+    }
+
+    const approvedChecksResult = await client.query(
+      `SELECT COUNT(*) as approved
+       FROM qc_checks
+       WHERE source_vendor_id = $1
+         AND data_from = 'M136'
+         AND status = 'Complete'
+         AND is_active = true`,
+      [vendorId]
+    );
+    const approvedChecks = parseInt(approvedChecksResult.rows[0].approved) || 0;
+
+    console.log(`[checkAndMoveOverseaVendor] Vendor ${vendorId}: ${approvedChecks}/${totalChecks} approved`);
+
+    if (totalChecks > 0 && approvedChecks === totalChecks) {
+      console.log(`[checkAndMoveOverseaVendor] All done! Moving vendor ${vendorId} to Pass tab`);
+
+      await client.query(
+        `UPDATE oversea_schedule_vendors
+         SET status = 'Pass',
+             sample_by = $2,
+             sample_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND is_active = true`,
+        [vendorId, approvedById]
+      );
+
+
+      await client.query(
+        `UPDATE oversea_schedule_parts
+         SET status = 'Pass', sample_dates = '[]'::jsonb, updated_at = CURRENT_TIMESTAMP
+         WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
+        [vendorId]
+      );
+
+      const vendorInfo = await client.query(
+        `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
+        [vendorId]
+      );
+
+      if (vendorInfo.rowCount > 0) {
+        const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
+
+        const allVendorsCheck = await client.query(
+          `SELECT COUNT(*) as total,
+                  SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as pass_count
+           FROM oversea_schedule_vendors
+           WHERE oversea_schedule_id = $1 AND is_active = true`,
+          [scheduleId]
+        );
+        const { total, pass_count } = allVendorsCheck.rows[0];
+        if (parseInt(total) > 0 && parseInt(total) === parseInt(pass_count)) {
+          await client.query(
+            `UPDATE oversea_schedules
+             SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND is_active = true`,
+            [scheduleId]
+          );
+          console.log(`[checkAndMoveOverseaVendor] Schedule ${scheduleId} moved to Pass`);
+        }
+      }
+
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.error(`[checkAndMoveOverseaVendor] Error:`, error.message);
+    return false;
+  }
+};
+
+
 const checkAndMoveLocalVendorToPassIfAllApproved = async (client, vendorId, approvedById) => {
   try {
     console.log(`[checkAndMoveLocalVendor] Checking vendor ${vendorId}`);
 
-    // Hitung total M101 qc_checks untuk vendor ini
+
     const totalChecksResult = await client.query(
       `SELECT COUNT(*) as total
        FROM qc_checks
@@ -324,7 +337,7 @@ const checkAndMoveLocalVendorToPassIfAllApproved = async (client, vendorId, appr
       return false;
     }
 
-    // Hitung yang sudah Complete
+
     const approvedChecksResult = await client.query(
       `SELECT COUNT(*) as approved
        FROM qc_checks
@@ -338,7 +351,7 @@ const checkAndMoveLocalVendorToPassIfAllApproved = async (client, vendorId, appr
 
     console.log(`[checkAndMoveLocalVendor] Vendor ${vendorId}: ${approvedChecks}/${totalChecks} approved`);
 
-    // Jika semua sudah Complete → pindahkan vendor ke tab Pass (vendor_status='Sample')
+
     if (totalChecks > 0 && approvedChecks === totalChecks) {
       console.log(`[checkAndMoveLocalVendor] All done! Moving vendor ${vendorId} to Sample (Pass tab)`);
 
@@ -352,7 +365,7 @@ const checkAndMoveLocalVendorToPassIfAllApproved = async (client, vendorId, appr
         [vendorId, approvedById]
       );
 
-      // Cek apakah semua vendor di schedule sudah Sample → update schedule status
+
       const vendorInfo = await client.query(
         `SELECT local_schedule_id FROM local_schedule_vendors WHERE id = $1`,
         [vendorId]
@@ -390,7 +403,7 @@ const checkAndMoveLocalVendorToPassIfAllApproved = async (client, vendorId, appr
   }
 };
 
-// ====== APPROVE QC Check ======
+
 router.put("/:id/approve", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -410,7 +423,7 @@ router.put("/:id/approve", async (req, res) => {
 
     const approvedById = await resolveEmployeeId(approved_by_name);
 
-    // Get QC check details before update (need source_vendor_id for auto-move)
+
     const qcCheckBefore = await client.query(
       `SELECT source_vendor_id, data_from FROM qc_checks WHERE id = $1 AND is_active = true`,
       [id]
@@ -426,7 +439,7 @@ router.put("/:id/approve", async (req, res) => {
 
     const { source_vendor_id, data_from } = qcCheckBefore.rows[0];
 
-    // Update status from "M136 Part" to "Complete"
+
     const result = await client.query(
       `UPDATE qc_checks 
        SET status = 'Complete',
@@ -446,83 +459,13 @@ router.put("/:id/approve", async (req, res) => {
 
     let vendorMovedToPass = false;
 
-    // AUTO-MOVE TO PASS: If this is the last QC check for M136 vendor
-    if (data_from === 'M136' && isLastQcCheck && source_vendor_id) {
-      console.log(`[QC APPROVE] Last QC check for vendor ${source_vendor_id}! Moving to Pass`);
 
-      try {
-        // Recalculate total_pallet before moving
-        const palletCalc = await client.query(
-          `SELECT COALESCE(SUM(quantity_box), 0) as total_boxes
-           FROM oversea_schedule_parts
-           WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-          [source_vendor_id]
-        );
-
-        const totalPallet = parseInt(palletCalc.rows[0]?.total_boxes) || 0;
-
-        // Update vendor status AND total_pallet AND set sample timestamp
-        await client.query(
-          `UPDATE oversea_schedule_vendors 
-            SET vendor_status = 'Sample',
-                sample_by = $2,              
-                sample_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP 
-            WHERE id = $1 AND is_active = true`,
-          [source_vendor_id, approvedById]  
-        );
-        console.log(`[QC APPROVE] Vendor ${source_vendor_id} moved to Pass with total_pallet=${totalPallet}`);
-
-        // Check if should update schedule status
-        const vendorInfo = await client.query(
-          `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
-          [source_vendor_id]
-        );
-
-        if (vendorInfo.rowCount > 0) {
-          const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
-
-          const allVendorsCheck = await client.query(
-            `SELECT COUNT(*) as total, 
-                    SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as sample_count
-             FROM oversea_schedule_vendors 
-             WHERE oversea_schedule_id = $1 AND is_active = true`,
-            [scheduleId]
-          );
-
-          const { total, sample_count } = allVendorsCheck.rows[0];
-          if (parseInt(total) > 0 && parseInt(total) === parseInt(sample_count)) {
-            // Recalculate schedule total_pallet (sum of all vendors)
-            const schedulePalletCalc = await client.query(
-              `SELECT COALESCE(SUM(total_pallet), 0) as total_pallets
-               FROM oversea_schedule_vendors
-               WHERE oversea_schedule_id = $1 AND is_active = true`,
-              [scheduleId]
-            );
-
-            const scheduleTotalPallet = parseInt(schedulePalletCalc.rows[0]?.total_pallets) || 0;
-
-            await client.query(
-              `UPDATE oversea_schedules 
-               SET status = 'Sample',
-                   total_pallet = $2,
-                   updated_at = CURRENT_TIMESTAMP 
-               WHERE id = $1 AND is_active = true`,
-              [scheduleId, scheduleTotalPallet]
-            );
-            console.log(`[QC APPROVE] Schedule ${scheduleId} moved to Sample with total_pallet=${scheduleTotalPallet}`);
-          }
-        }
-
-        vendorMovedToPass = true;
-      } catch (autoMoveError) {
-        console.error(`[QC APPROVE] Error auto-moving vendor:`, autoMoveError.message);
-        // Don't rollback, just log
-      }
+    if (data_from === 'M136' && source_vendor_id) {
+      const moved = await checkAndMoveOverseaVendorToPassIfAllApproved(client, source_vendor_id, approvedById);
+      if (moved) vendorMovedToPass = true;
     }
 
-    // AUTO-MOVE TO SAMPLE (Pass): Jika semua M101 qc_checks untuk vendor ini sudah Complete
-    // PERBAIKAN: Tidak bergantung isLastQcCheck dari frontend — query DB langsung (mirip M136 di overseaSchedules)
+
     if (data_from === 'M101' && source_vendor_id) {
       const moved = await checkAndMoveLocalVendorToPassIfAllApproved(client, source_vendor_id, approvedById);
       if (moved) vendorMovedToPass = true;
@@ -551,7 +494,7 @@ router.put("/:id/approve", async (req, res) => {
   }
 });
 
-// ====== REJECT QC Check ======
+
 router.put("/:id/reject", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -619,7 +562,7 @@ router.put("/:id/reject", async (req, res) => {
   }
 });
 
-// ====== DELETE QC Check ======
+
 router.delete("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -665,9 +608,9 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// ====== Endpoint Penting Lainnya ======
 
-// CHECK IF PART + DATE IS COMPLETE
+
+
 router.get("/check-complete/:part_code/:production_date", async (req, res) => {
   try {
     const { part_code, production_date } = req.params;
@@ -696,7 +639,7 @@ router.get("/check-complete/:part_code/:production_date", async (req, res) => {
   }
 });
 
-// BULK CHECK COMPLETE
+
 router.post("/check-complete-bulk", async (req, res) => {
   try {
     const { checks } = req.body;
@@ -759,7 +702,7 @@ router.post("/check-complete-bulk", async (req, res) => {
   }
 });
 
-// GET Current Check tab (Pending status)
+
 router.get("/current-check", async (req, res) => {
   try {
     const result = await pool.query(
@@ -796,7 +739,7 @@ router.get("/current-check", async (req, res) => {
   }
 });
 
-// UPDATE QC STATUS
+
 router.put("/:id/update-status", async (req, res) => {
   try {
     const { id } = req.params;
@@ -837,7 +780,7 @@ router.put("/:id/update-status", async (req, res) => {
   }
 });
 
-// BULK APPROVE
+
 router.post("/bulk-approve", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -892,7 +835,7 @@ router.post("/bulk-approve", async (req, res) => {
   }
 });
 
-// GET single QC Check by ID
+
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;

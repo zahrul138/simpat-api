@@ -11,8 +11,6 @@ const customersRoutes = require("./routes/customers");
 const productionSchedulesRoutes = require("./routes/productionSchedules");
 
 const localSchedulesRoutes = require("./routes/localSchedules");
-const localScheduleVendorsRoutes = require("./routes/localScheduleVendors");
-const localSchedulePartsRoutes = require("./routes/localScheduleParts");
 const mastersRoutes = require("./routes/masters");
 const kanbanMasterRouter = require("./routes/kanbanMaster");
 const vendorsRoutes = require("./routes/vendors");
@@ -65,8 +63,6 @@ app.use("/departments", deptRoutes);
 app.use("/api/customers", customersRoutes);
 app.use("/api/production-schedules", productionSchedulesRoutes);
 app.use("/api/local-schedules", localSchedulesRoutes);          
-app.use("/api/local-schedules", localScheduleVendorsRoutes);    
-app.use("/api/local-schedules", localSchedulePartsRoutes);
 app.use("/api/masters", mastersRoutes);      
 app.use("/api/kanban-master", kanbanMasterRouter);      
 app.use("/api/vendors", vendorsRoutes);

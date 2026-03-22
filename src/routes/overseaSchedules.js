@@ -1,11 +1,10 @@
-// routes/overseaSchedules.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-// ==================== PALLET CALCULATION FUNCTIONS ====================
 
-// Pallet configurations
+
+
 const PALLET_CONFIG = {
   large: {
     length: 110,
@@ -23,7 +22,7 @@ const PALLET_CONFIG = {
   },
 };
 
-// Helper: check if box fits in pallet
+
 const canBoxFitPallet = (boxLength, boxWidth, palletLength, palletWidth) => {
   return (
     (boxLength <= palletLength && boxWidth <= palletWidth) ||
@@ -31,28 +30,28 @@ const canBoxFitPallet = (boxLength, boxWidth, palletLength, palletWidth) => {
   );
 };
 
-// Calculate max boxes per pallet
+
 const calculateMaxBoxesInPallet = (box, palletType) => {
   const config = PALLET_CONFIG[palletType];
   const availableHeight = config.maxHeight - config.baseHeight;
 
-  // Calculate boxes per layer with best orientation
+
   let bestBoxesPerLayer = 0;
 
-  // Try normal orientation
+
   const boxesLengthwiseNormal = Math.floor(config.length / box.length);
   const boxesWidthwiseNormal = Math.floor(config.width / box.width);
   const boxesPerLayerNormal = boxesLengthwiseNormal * boxesWidthwiseNormal;
 
-  // Try rotated orientation
+
   const boxesLengthwiseRotated = Math.floor(config.length / box.width);
   const boxesWidthwiseRotated = Math.floor(config.width / box.length);
   const boxesPerLayerRotated = boxesLengthwiseRotated * boxesWidthwiseRotated;
 
-  // Take the best
+
   bestBoxesPerLayer = Math.max(boxesPerLayerNormal, boxesPerLayerRotated);
 
-  // For large pallet, try mixed if less than 4
+
   if (palletType === "large" && bestBoxesPerLayer < 4) {
     const boxesMixed = boxesPerLayerNormal + boxesPerLayerRotated;
     bestBoxesPerLayer = Math.max(bestBoxesPerLayer, Math.min(4, boxesMixed));
@@ -60,30 +59,30 @@ const calculateMaxBoxesInPallet = (box, palletType) => {
 
   if (bestBoxesPerLayer === 0) return { maxBoxesPerPallet: 0 };
 
-  // Calculate max layers by height
+
   const maxLayersByHeight = Math.floor(availableHeight / box.height);
   const safeLayersByHeight = Math.max(1, maxLayersByHeight - 1);
 
-  // Calculate weight per layer
+
   const weightPerLayer = bestBoxesPerLayer * box.weight;
 
-  // Calculate max layers by weight
+
   const maxLayersByWeight = weightPerLayer > 0
     ? Math.floor(config.maxWeight / weightPerLayer)
     : safeLayersByHeight;
 
-  // Take the smaller between height and weight limits
+
   const finalLayers = Math.max(1, Math.min(safeLayersByHeight, maxLayersByWeight));
 
-  // Total boxes per pallet by dimensions
+
   const maxBoxesByDimension = bestBoxesPerLayer * finalLayers;
 
-  // Calculate max boxes by weight only
+
   const maxBoxesByWeight = box.weight > 0
     ? Math.floor(config.maxWeight / box.weight)
     : maxBoxesByDimension;
 
-  // Take the smaller (dimension OR weight that limits)
+
   const maxBoxesPerPallet = Math.min(maxBoxesByDimension, maxBoxesByWeight);
 
   return {
@@ -93,32 +92,32 @@ const calculateMaxBoxesInPallet = (box, palletType) => {
   };
 };
 
-// Optimize pallet mixing
+
 const optimizePalletMixing = (palletDetails) => {
   if (palletDetails.length <= 1) return palletDetails;
 
   const optimized = [...palletDetails];
 
-  // Try to merge pallets of same type with available space
+
   for (let i = 0; i < optimized.length; i++) {
     for (let j = i + 1; j < optimized.length; j++) {
       const palletA = optimized[i];
       const palletB = optimized[j];
 
-      // Only merge if same type
+
       if (palletA.palletType !== palletB.palletType) continue;
 
       const maxWeight = palletA.palletType === "large" ? 150 : 60;
       const combinedWeight = palletA.totalWeight + palletB.totalWeight;
       const combinedBoxes = palletA.boxesCount + palletB.boxesCount;
 
-      // Check if can be merged (weight and capacity)
+
       if (combinedWeight <= maxWeight && combinedBoxes <= palletA.capacity) {
-        // Merge into palletA
+
         palletA.boxesCount = combinedBoxes;
         palletA.totalWeight = combinedWeight;
 
-        // Remove palletB
+
         optimized.splice(j, 1);
         j--;
       }
@@ -128,12 +127,12 @@ const optimizePalletMixing = (palletDetails) => {
   return optimized;
 };
 
-// Get box dimensions from database (same query as /api/kanban-master/placement-details)
+
 const getBoxDimensionsFromDB = async (client, partCode) => {
   const defaultDimensions = { length: 30, width: 30, height: 30, weight: 0.5 };
 
   try {
-    // Query same as /api/kanban-master/placement-details endpoint
+
     const result = await client.query(
       `SELECT 
         km.part_code,
@@ -154,7 +153,7 @@ const getBoxDimensionsFromDB = async (client, partCode) => {
     if (result.rowCount > 0) {
       const row = result.rows[0];
 
-      // Convert weight unit to kg (same as placement-details endpoint)
+
       let partWeight = parseFloat(row.part_weight) || 0;
       if (row.weight_unit === 'g') {
         partWeight = partWeight / 1000;
@@ -179,13 +178,13 @@ const getBoxDimensionsFromDB = async (client, partCode) => {
   }
 };
 
-// Calculate optimized pallet count from box data
+
 const calculateOptimizedPallet = (boxData) => {
   if (!boxData || boxData.length === 0) {
     return { largePallets: 0, smallPallets: 0, totalPallets: 0 };
   }
 
-  // Group boxes by size
+
   const boxGroups = {};
 
   boxData.forEach((box) => {
@@ -207,8 +206,7 @@ const calculateOptimizedPallet = (boxData) => {
 
   const palletDetails = [];
 
-  // PERBAIKAN: Urutkan keys untuk konsistensi dengan frontend
-  // for...in tidak menjamin urutan, menyebabkan hasil berbeda dengan frontend
+
   const sortedKeys = Object.keys(boxGroups).sort();
 
   for (const key of sortedKeys) {
@@ -217,7 +215,7 @@ const calculateOptimizedPallet = (boxData) => {
 
     const weightPerBox = group.totalWeight / group.totalBoxes;
 
-    // Check which pallet type fits
+
     const fitsLarge = canBoxFitPallet(group.length, group.width, 110, 110);
     const fitsSmall = canBoxFitPallet(group.length, group.width, 96, 76);
 
@@ -226,7 +224,7 @@ const calculateOptimizedPallet = (boxData) => {
       palletType = "small";
     }
 
-    // Calculate capacity
+
     const capacity = calculateMaxBoxesInPallet(
       {
         length: group.length,
@@ -239,10 +237,10 @@ const calculateOptimizedPallet = (boxData) => {
 
     if (capacity.maxBoxesPerPallet === 0) continue;
 
-    // Calculate pallets needed
+
     const palletsNeeded = Math.ceil(group.totalBoxes / capacity.maxBoxesPerPallet);
 
-    // Distribute to pallets
+
     let remainingBoxes = group.totalBoxes;
     for (let i = 0; i < palletsNeeded; i++) {
       const boxesInThisPallet = Math.min(remainingBoxes, capacity.maxBoxesPerPallet);
@@ -260,10 +258,10 @@ const calculateOptimizedPallet = (boxData) => {
     }
   }
 
-  // Optimize mixing
+
   const optimizedPallets = optimizePalletMixing(palletDetails);
 
-  // Count results
+
   let largePallets = 0;
   let smallPallets = 0;
 
@@ -282,10 +280,10 @@ const calculateOptimizedPallet = (boxData) => {
   };
 };
 
-// Calculate total pallet for a vendor based on its parts
+
 const calculateVendorTotalPallet = async (client, vendorId) => {
   try {
-    // Get all parts for this vendor
+
     const partsResult = await client.query(
       `SELECT part_code, quantity_box FROM oversea_schedule_parts 
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
@@ -296,7 +294,7 @@ const calculateVendorTotalPallet = async (client, vendorId) => {
       return 0;
     }
 
-    // Collect box data
+
     const boxData = [];
 
     for (const part of partsResult.rows) {
@@ -305,7 +303,7 @@ const calculateVendorTotalPallet = async (client, vendorId) => {
 
       const dimensions = await getBoxDimensionsFromDB(client, part.part_code);
 
-      // Add each box
+
       for (let i = 0; i < qtyBox; i++) {
         boxData.push({
           length: dimensions.length,
@@ -321,7 +319,7 @@ const calculateVendorTotalPallet = async (client, vendorId) => {
       return 0;
     }
 
-    // Calculate optimized pallets
+
     const result = calculateOptimizedPallet(boxData);
 
     console.log(`[calculateVendorTotalPallet] Vendor ${vendorId}: ${boxData.length} boxes -> ${result.totalPallets} pallets`);
@@ -329,17 +327,17 @@ const calculateVendorTotalPallet = async (client, vendorId) => {
     return result.totalPallets;
   } catch (error) {
     console.error(`[calculateVendorTotalPallet] Error for vendor ${vendorId}:`, error.message);
-    // Return 0 on error - don't try to query again as transaction may be aborted
+
     return 0;
   }
 };
 
-// ==================== OPTIMIZED TOTALS UPDATE FUNCTIONS ====================
 
-// Update vendor totals (total_item and total_pallet) using optimized pallet calculation
+
+
 const updateVendorTotals = async (client, vendorId) => {
   try {
-    // Calculate total_item (count of parts)
+
     const itemResult = await client.query(
       `SELECT COUNT(*) as total_item FROM oversea_schedule_parts 
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
@@ -347,10 +345,10 @@ const updateVendorTotals = async (client, vendorId) => {
     );
     const totalItem = parseInt(itemResult.rows[0].total_item) || 0;
 
-    // Calculate total_pallet using optimized calculation
+
     const totalPallet = await calculateVendorTotalPallet(client, vendorId);
 
-    // Update vendor
+
     await client.query(
       `UPDATE oversea_schedule_vendors 
        SET total_item = $1, total_pallet = $2, updated_at = CURRENT_TIMESTAMP 
@@ -363,7 +361,7 @@ const updateVendorTotals = async (client, vendorId) => {
     return { totalItem, totalPallet };
   } catch (error) {
     console.error(`[updateVendorTotals] Error for vendor ${vendorId}:`, error.message);
-    // Fallback to simple calculation if optimized fails
+
     try {
       await client.query(
         `UPDATE oversea_schedule_vendors 
@@ -387,10 +385,10 @@ const updateVendorTotals = async (client, vendorId) => {
   }
 };
 
-// Update schedule totals from all its vendors
+
 const updateScheduleTotals = async (client, scheduleId) => {
   try {
-    // Sum totals from all active vendors
+
     const result = await client.query(
       `UPDATE oversea_schedules
        SET total_item = (
@@ -418,11 +416,11 @@ const updateScheduleTotals = async (client, scheduleId) => {
   }
 };
 
-const createQCChecksForSampleDates = async (client, vendorId, vendorName, createdByName) => {
+const createQCChecksForPassDates = async (client, vendorId, vendorName, createdByName) => {
   try {
-    console.log(`[createQCChecksForSampleDates] Creating QC checks for vendor ${vendorId}`);
+    console.log(`[createQCChecksForPassDates] Creating QC checks for vendor ${vendorId}`);
 
-    // Get all parts with their prod_dates for this vendor
+
     const partsResult = await client.query(
       `SELECT id, part_code, part_name, prod_dates 
        FROM oversea_schedule_parts 
@@ -433,7 +431,7 @@ const createQCChecksForSampleDates = async (client, vendorId, vendorName, create
     const qcChecksCreated = [];
 
     for (const part of partsResult.rows) {
-      // Parse prod_dates (can be JSONB array or single value)
+
       let prodDates = [];
 
       if (part.prod_dates) {
@@ -450,15 +448,15 @@ const createQCChecksForSampleDates = async (client, vendorId, vendorName, create
         }
       }
 
-      // For each prod_date that is SAMPLE
+
       for (const prodDate of prodDates) {
         const prodDateStr = String(prodDate || '').toUpperCase();
 
-        // Check if prod_date is SAMPLE
-        if (prodDateStr.includes('SAMPLE') || prodDateStr === 'SAMPLE') {
-          console.log(`[createQCChecksForSampleDates] Creating QC check for ${part.part_code} - ${prodDate}`);
 
-          // Check if QC check already exists
+        if (prodDateStr.includes('SAMPLE') || prodDateStr === 'SAMPLE') {
+          console.log(`[createQCChecksForPassDates] Creating QC check for ${part.part_code} - ${prodDate}`);
+
+
           const existingCheck = await client.query(
             `SELECT id FROM qc_checks 
              WHERE part_code = $1 
@@ -471,7 +469,7 @@ const createQCChecksForSampleDates = async (client, vendorId, vendorName, create
           );
 
           if (existingCheck.rowCount === 0) {
-            // Create new QC check
+
             const insertResult = await client.query(
               `INSERT INTO qc_checks (
                 part_code, 
@@ -495,7 +493,7 @@ const createQCChecksForSampleDates = async (client, vendorId, vendorName, create
                 vendorName,
                 String(prodDate),
                 'M136',
-                'Pending',
+                'M136 Part',
                 null,
                 vendorId,
                 part.id,
@@ -513,20 +511,20 @@ const createQCChecksForSampleDates = async (client, vendorId, vendorName, create
       }
     }
 
-    console.log(`[createQCChecksForSampleDates] Created ${qcChecksCreated.length} QC checks`);
+    console.log(`[createQCChecksForPassDates] Created ${qcChecksCreated.length} QC checks`);
     return qcChecksCreated;
   } catch (error) {
-    console.error(`[createQCChecksForSampleDates] Error:`, error.message);
+    console.error(`[createQCChecksForPassDates] Error:`, error.message);
     throw error;
   }
 };
 
-// Check if all SAMPLE prod_dates for a vendor are approved and move to Pass
+
 const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
   try {
     console.log(`[checkAndMoveVendorToPassIfAllApproved] Checking vendor ${vendorId}`);
 
-    // Count total SAMPLE QC checks for this vendor
+
     const totalChecksResult = await client.query(
       `SELECT COUNT(*) as total 
        FROM qc_checks 
@@ -543,7 +541,7 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
       return false;
     }
 
-    // Count approved QC checks
+
     const approvedChecksResult = await client.query(
       `SELECT COUNT(*) as approved 
        FROM qc_checks 
@@ -558,19 +556,27 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
 
     console.log(`[checkAndMoveVendorToPassIfAllApproved] Vendor ${vendorId}: ${approvedChecks}/${totalChecks} approved`);
 
-    // If all approved, move vendor to Pass
+
     if (totalChecks > 0 && approvedChecks === totalChecks) {
       console.log(`[checkAndMoveVendorToPassIfAllApproved] All QC checks approved! Moving vendor ${vendorId} to Pass`);
 
       await client.query(
         `UPDATE oversea_schedule_vendors 
-         SET vendor_status = 'Sample', 
+         SET status = 'Pass', 
              updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true`,
         [vendorId]
       );
 
-      // Get schedule_id to update schedule status if needed
+
+      await client.query(
+        `UPDATE oversea_schedule_parts
+         SET sample_dates = '[]'::jsonb, updated_at = CURRENT_TIMESTAMP
+         WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
+        [vendorId]
+      );
+
+
       const vendorInfo = await client.query(
         `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
         [vendorId]
@@ -579,25 +585,25 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
       if (vendorInfo.rowCount > 0) {
         const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
 
-        // Check if all vendors in schedule are in Sample status
+
         const allVendorsCheck = await client.query(
           `SELECT COUNT(*) as total, 
-                  SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as sample_count
+                  SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as pass_count
            FROM oversea_schedule_vendors 
            WHERE oversea_schedule_id = $1 AND is_active = true`,
           [scheduleId]
         );
 
-        const { total, sample_count } = allVendorsCheck.rows[0];
-        if (parseInt(total) > 0 && parseInt(total) === parseInt(sample_count)) {
+        const { total, pass_count } = allVendorsCheck.rows[0];
+        if (parseInt(total) > 0 && parseInt(total) === parseInt(pass_count)) {
           await client.query(
             `UPDATE oversea_schedules 
-             SET status = 'Sample', 
+             SET status = 'Pass', 
                  updated_at = CURRENT_TIMESTAMP 
              WHERE id = $1 AND is_active = true`,
             [scheduleId]
           );
-          console.log(`[checkAndMoveVendorToPassIfAllApproved] Schedule ${scheduleId} moved to Sample`);
+          console.log(`[checkAndMoveVendorToPassIfAllApproved] Schedule ${scheduleId} moved to Pass`);
         }
       }
 
@@ -611,9 +617,9 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
   }
 };
 
-// ==================== END QC CHECKS AUTO-CREATE FUNCTIONS ====================
 
-// helper functions
+
+
 const resolveEmployeeId = async (client, empName) => {
   if (!empName) return null;
   const q = await client.query(
@@ -623,7 +629,7 @@ const resolveEmployeeId = async (client, empName) => {
   return q.rows[0]?.id ?? null;
 };
 
-// ====== CREATE header schedule (New) ======
+
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -641,28 +647,14 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing fields" });
     }
 
-    const existingSchedule = await client.query(
-      `SELECT id FROM oversea_schedules 
-       WHERE schedule_date = $1::date AND is_active = true LIMIT 1`,
-      [scheduleDate]
-    );
-
-    if (existingSchedule.rowCount > 0) {
-      return res.status(409).json({
-        success: false,
-        message: "Schedule date already exists in database",
-        existingSchedule: existingSchedule.rows[0],
-      });
-    }
-
     await client.query("BEGIN");
     const uploadBy = await resolveEmployeeId(client, uploadByName);
 
-    // Generate schedule_code
+
     const now = new Date();
     const scheduleDateObj = new Date(scheduleDate);
 
-    const scheduleCode = `OVERSEA-${String(scheduleDateObj.getDate()).padStart(2, '0')}/${String(scheduleDateObj.getMonth() + 1).padStart(2, '0')}/${scheduleDateObj.getFullYear()}/${String(now.getHours()).padStart(2, '0')}.${String(now.getMinutes()).padStart(2, '0')}`;
+    const scheduleCode = `OVERSEA-${String(scheduleDateObj.getDate()).padStart(2, '0')}/${String(scheduleDateObj.getMonth() + 1).padStart(2, '0')}/${scheduleDateObj.getFullYear()}/${String(now.getHours()).padStart(2, '0')}.${String(now.getMinutes()).padStart(2, '0')}.${String(now.getSeconds()).padStart(2, '0')}`;
 
     const ins = await client.query(
       `INSERT INTO oversea_schedules
@@ -695,7 +687,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ====== CHECK schedule date ======
+
 router.get("/check-date", async (req, res) => {
   try {
     const { scheduleDate } = req.query;
@@ -716,19 +708,19 @@ router.get("/check-date", async (req, res) => {
   }
 });
 
-// ====== GET all oversea schedules ======
+
 router.get("/", async (req, res) => {
   const client = await pool.connect();
   try {
     const { status, date_from, date_to, vendor_name, part_code } = req.query;
 
-    // Map frontend status to database status
+
     const statusMapping = {
       "New": "New",
-      "Schedule": "Scheduled",
+      "Schedule": "Schedule",
       "Received": "Received",
       "IQC Progress": "IQC Progress",
-      "Sample": "Sample",
+      "Pass": "Pass",
       "Complete": "Complete"
     };
 
@@ -754,14 +746,14 @@ router.get("/", async (req, res) => {
     const params = [];
     let paramCount = 0;
 
-    // Filter by status
+
     if (status && statusMapping[status]) {
       paramCount++;
       query += ` AND os.status = $${paramCount}`;
       params.push(statusMapping[status]);
     }
 
-    // Filter by date range
+
     if (date_from) {
       paramCount++;
       query += ` AND os.schedule_date >= $${paramCount}::date`;
@@ -774,7 +766,7 @@ router.get("/", async (req, res) => {
       params.push(date_to);
     }
 
-    query += ` ORDER BY os.schedule_date DESC, os.created_at DESC`;
+    query += ` ORDER BY os.updated_at DESC, os.created_at DESC`;
 
     console.log("Query:", query);
     console.log("Params:", params);
@@ -782,24 +774,24 @@ router.get("/", async (req, res) => {
     const result = await client.query(query, params);
     console.log("Found schedules:", result.rows.length);
 
-    // Get detailed data for each schedule
+
     const schedulesWithDetails = await Promise.all(
       result.rows.map(async (schedule) => {
         console.log(`Fetching vendors for schedule ${schedule.id}`);
 
         try {
-          // Get vendors for this schedule
+
           const vendorsResult = await client.query(
             `SELECT 
               osv.id,
               osv.oversea_schedule_id,
               osv.trip_id,
               osv.vendor_id,
-              osv.do_numbers,
+              osv.do_number,
               osv.arrival_time,
               osv.total_pallet,
               osv.total_item,
-              osv.vendor_status,
+              osv.status,
               osv.move_by,
               osv.move_at,
               osv.approve_by,
@@ -828,7 +820,7 @@ router.get("/", async (req, res) => {
 
           console.log(`Found ${vendorsResult.rows.length} vendors for schedule ${schedule.id}`);
 
-          // Get parts for each vendor
+
           const vendorsWithParts = await Promise.all(
             vendorsResult.rows.map(async (vendor) => {
               console.log(`Fetching parts for vendor ${vendor.id}`);
@@ -902,7 +894,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ====== GET received vendors (flat list) ======
+
 router.get("/received-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -915,7 +907,7 @@ router.get("/received-vendors", async (req, res) => {
        LEFT JOIN trips t ON t.id = osv.trip_id
        LEFT JOIN employees e_move ON e_move.id = osv.move_by
        LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
-       WHERE osv.vendor_status = 'Received' AND osv.is_active = true
+       WHERE osv.status = 'Received' AND osv.is_active = true
        ORDER BY osv.move_at DESC`
     );
 
@@ -940,7 +932,7 @@ router.get("/received-vendors", async (req, res) => {
           [vendor.id]
         );
 
-        // Parse prod_dates
+
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
           prod_dates:
@@ -967,20 +959,20 @@ router.get("/received-vendors", async (req, res) => {
   }
 });
 
-// ====== GET all vendors with IQC Progress status ======
+
 router.get("/iqc-progress-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
-    // Get all vendors with vendor_status = 'IQC Progress'
+
     const vendorsResult = await client.query(
       `SELECT 
         osv.id,
         osv.oversea_schedule_id,
         osv.vendor_id,
-        osv.do_numbers,
+        osv.do_number,
         osv.total_pallet,
         osv.total_item,
-        osv.vendor_status,
+        osv.status,
         osv.approve_by,
         osv.approve_at,
         TO_CHAR(osv.schedule_date_ref, 'YYYY-MM-DD') as schedule_date,
@@ -994,11 +986,11 @@ router.get("/iqc-progress-vendors", async (req, res) => {
        LEFT JOIN vendor_detail vd ON vd.id = osv.vendor_id
        LEFT JOIN employees em ON em.id = osv.approve_by
        LEFT JOIN trips t ON t.id = osv.trip_id
-       WHERE osv.vendor_status = 'IQC Progress' AND osv.is_active = true
+       WHERE osv.status = 'IQC Progress' AND osv.is_active = true
        ORDER BY osv.approve_at DESC, osv.id ASC`,
     );
 
-    // Get parts for each vendor with prod_dates
+
     const vendorsWithParts = await Promise.all(
       vendorsResult.rows.map(async (vendor) => {
         const partsResult = await client.query(
@@ -1021,7 +1013,7 @@ router.get("/iqc-progress-vendors", async (req, res) => {
           [vendor.id],
         );
 
-        // Parse prod_dates and sample_dates from JSON
+
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
           prod_dates:
@@ -1062,8 +1054,8 @@ router.get("/iqc-progress-vendors", async (req, res) => {
   }
 });
 
-// ====== GET Sample vendors ======
-router.get("/sample-vendors", async (req, res) => {
+
+router.get("/pass-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -1075,13 +1067,13 @@ router.get("/sample-vendors", async (req, res) => {
        LEFT JOIN trips t ON t.id = osv.trip_id
        LEFT JOIN employees e_sample ON e_sample.id = osv.sample_by
        LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
-       WHERE osv.vendor_status = 'Sample' AND osv.is_active = true
+       WHERE osv.status = 'Pass' AND osv.is_active = true
        ORDER BY osv.sample_at DESC`
     );
 
     const vendorsWithParts = await Promise.all(
       result.rows.map(async (vendor) => {
-        // AFTER - Add sample_dates
+
         const partsResult = await client.query(
           `SELECT 
             osp.id,
@@ -1102,7 +1094,7 @@ router.get("/sample-vendors", async (req, res) => {
           [vendor.id]
         );
 
-        // Parse prod_dates and sample_dates
+
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
           prod_dates:
@@ -1127,14 +1119,14 @@ router.get("/sample-vendors", async (req, res) => {
     );
     res.json({ success: true, vendors: vendorsWithParts });
   } catch (error) {
-    console.error("[GET Sample Vendors] Error:", error);
-    res.status(500).json({ success: false, message: "Failed to fetch sample vendors" });
+    console.error("[GET Pass Vendors] Error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch pass vendors" });
   } finally {
     client.release();
   }
 });
 
-// ====== GET Complete vendors ======
+
 router.get("/complete-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1147,13 +1139,13 @@ router.get("/complete-vendors", async (req, res) => {
        LEFT JOIN trips t ON t.id = osv.trip_id
        LEFT JOIN employees e_complete ON e_complete.id = osv.complete_by
        LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
-       WHERE osv.vendor_status = 'Complete' AND osv.is_active = true
+       WHERE osv.status = 'Complete' AND osv.is_active = true
        ORDER BY osv.complete_at DESC`
     );
 
     const vendorsWithParts = await Promise.all(
       result.rows.map(async (vendor) => {
-        // AFTER - Add sample_dates
+
         const partsResult = await client.query(
           `SELECT 
             osp.id,
@@ -1174,7 +1166,7 @@ router.get("/complete-vendors", async (req, res) => {
           [vendor.id]
         );
 
-        // Parse prod_dates and sample_dates
+
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
           prod_dates:
@@ -1206,30 +1198,30 @@ router.get("/complete-vendors", async (req, res) => {
   }
 });
 
-// ====== ADD single vendor ======
+
 router.post("/:scheduleId/vendors", async (req, res) => {
   const client = await pool.connect();
   try {
     const { scheduleId } = req.params;
-    const { trip_id, vendor_id, do_numbers } = req.body;
+    const { trip_id, vendor_id, do_number } = req.body;
 
     console.log(`[ADD Vendor] Request:`, {
       scheduleId,
       trip_id,
       vendor_id,
-      do_numbers,
+      do_number,
     });
 
-    if (!trip_id || !vendor_id || !do_numbers) {
+    if (!trip_id || !vendor_id || !do_number) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: trip_id, vendor_id, do_numbers",
+        message: "Missing required fields: trip_id, vendor_id, do_number",
       });
     }
 
     await client.query("BEGIN");
 
-    // Cek schedule exists dan ambil data schedule
+
     const scheduleCheck = await client.query(
       `SELECT id, schedule_date, stock_level, model_name, status 
        FROM oversea_schedules 
@@ -1247,7 +1239,7 @@ router.post("/:scheduleId/vendors", async (req, res) => {
 
     const schedule = scheduleCheck.rows[0];
 
-    // Get trip arrival time
+
     const tripCheck = await client.query(
       `SELECT id, arv_to FROM trips WHERE id = $1`,
       [trip_id],
@@ -1263,33 +1255,30 @@ router.post("/:scheduleId/vendors", async (req, res) => {
 
     const arrivalTime = tripCheck.rows[0].arv_to;
 
-    // Pastikan do_numbers adalah array
-    const doArray = Array.isArray(do_numbers)
-      ? do_numbers.filter(d => d && d.trim())
-      : [do_numbers].filter(d => d && d.trim());
+    const doArray = Array.isArray(do_number)
+      ? do_number.filter(d => d && d.trim())
+      : [do_number].filter(d => d && d.trim());
 
-    // Insert vendor dengan SEMUA data referensi dari schedule
     const result = await client.query(
       `INSERT INTO oversea_schedule_vendors
-       (oversea_schedule_id, trip_id, vendor_id, do_numbers, arrival_time, 
-        total_pallet, total_item, vendor_status,
+       (oversea_schedule_id, trip_id, vendor_id, do_number, arrival_time, 
+        total_pallet, total_item, status,
         schedule_date_ref, stock_level_ref, model_name_ref)
-       VALUES ($1, $2, $3, $4, $5, 0, 0, 'Pending', $6, $7, $8)
-       RETURNING id, oversea_schedule_id, trip_id, vendor_id, do_numbers, arrival_time,
-                 schedule_date_ref, stock_level_ref, model_name_ref`,
+       VALUES ($1, $2, $3, $4, $5, 0, 0, 'New', $6, $7, $8)
+       RETURNING id, oversea_schedule_id, trip_id, vendor_id, do_number, arrival_time,
+        schedule_date_ref, stock_level_ref, model_name_ref`,
       [
         scheduleId,
         trip_id,
         vendor_id,
-        doArray,
+        doArray.join(" | "),
         arrivalTime,
-        schedule.schedule_date,  // schedule_date_ref
-        schedule.stock_level,    // stock_level_ref
-        schedule.model_name      // model_name_ref
+        schedule.schedule_date,  
+        schedule.stock_level,    
+        schedule.model_name     
       ],
     );
 
-    // Update total_vendor di schedule
     await client.query(
       `UPDATE oversea_schedules
        SET total_vendor = (
@@ -1322,7 +1311,7 @@ router.post("/:scheduleId/vendors", async (req, res) => {
   }
 });
 
-// ====== BULK ADD VENDORS to schedule ======
+
 router.post("/:scheduleId/vendors/bulk", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1344,7 +1333,7 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek schedule exists
+
     const scheduleCheck = await client.query(
       `SELECT id, schedule_date, stock_level, model_name, status 
        FROM oversea_schedules 
@@ -1370,13 +1359,13 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
       const { tripId, vendorId, doNumbers, arrivalTime, totalPallet, totalItem } = item;
 
       try {
-        // Validate required fields
+
         if (!tripId || !vendorId) {
           vendorErrors.push(`Item ${i + 1}: Missing tripId or vendorId`);
           continue;
         }
 
-        // Get trip arrival time if not provided
+
         let finalArrivalTime = arrivalTime;
         if (!finalArrivalTime) {
           const tripCheck = await client.query(
@@ -1388,31 +1377,31 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
           }
         }
 
-        // Ensure doNumbers is array
+
         const doArray = Array.isArray(doNumbers)
           ? doNumbers.filter(d => d && String(d).trim())
           : [doNumbers].filter(d => d && String(d).trim());
 
-        // Insert vendor - dengan SEMUA data referensi dari schedule
+
         const result = await client.query(
           `INSERT INTO oversea_schedule_vendors
-           (oversea_schedule_id, trip_id, vendor_id, do_numbers, arrival_time, 
-            total_pallet, total_item, vendor_status,
+           (oversea_schedule_id, trip_id, vendor_id, do_number, arrival_time, 
+            total_pallet, total_item, status,
             schedule_date_ref, stock_level_ref, model_name_ref)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8, $9, $10)
-           RETURNING id, trip_id, vendor_id, do_numbers, arrival_time, total_pallet, total_item,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'New', $8, $9, $10)
+           RETURNING id, trip_id, vendor_id, do_number, arrival_time, total_pallet, total_item,
                      schedule_date_ref, stock_level_ref, model_name_ref`,
           [
             scheduleId,
             tripId,
             vendorId,
-            doArray,
+            doArray.join(" | "),
             finalArrivalTime || null,
             totalPallet || 0,
             totalItem || 0,
-            schedule.schedule_date,  // schedule_date_ref
-            schedule.stock_level,    // stock_level_ref
-            schedule.model_name      // model_name_ref
+            schedule.schedule_date,
+            schedule.stock_level,
+            schedule.model_name
           ],
         );
 
@@ -1425,7 +1414,7 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
       }
     }
 
-    // Jika semua vendor gagal
+
     if (vendorIds.length === 0 && vendorErrors.length > 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({
@@ -1435,7 +1424,7 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
       });
     }
 
-    // Update total_vendor count
+
     await client.query(
       `UPDATE oversea_schedules
        SET total_vendor = (
@@ -1447,7 +1436,7 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
       [scheduleId],
     );
 
-    // Update schedule totals using optimized calculation
+
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
@@ -1473,7 +1462,7 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
   }
 });
 
-// ====== ADD single part to existing vendor ======
+
 router.post("/vendors/:vendorId/parts", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1499,7 +1488,7 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek vendor exists
+
     const vendorCheck = await client.query(
       `SELECT id, oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1 AND is_active = true`,
       [vendorId],
@@ -1515,7 +1504,7 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
 
     const scheduleId = vendorCheck.rows[0].oversea_schedule_id;
 
-    // Get part_id from kanban_master if exists
+
     let partId = null;
     const partRes = await client.query(
       `SELECT id, qty_per_box FROM kanban_master WHERE part_code = $1 AND is_active = true LIMIT 1`,
@@ -1528,17 +1517,17 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
       qtyPerBox = partRes.rows[0].qty_per_box || 1;
     }
 
-    // Calculate quantity_box if not provided
+
     let finalQuantityBox = quantity_box;
     if (!quantity_box && quantity && qtyPerBox > 0) {
       finalQuantityBox = Math.ceil(Number(quantity) / qtyPerBox);
     }
 
-    // Insert part
+
     const result = await client.query(
       `INSERT INTO oversea_schedule_parts
        (oversea_schedule_vendor_id, part_id, part_code, part_name, quantity, quantity_box, unit, do_number, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Pending')
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'New')
        RETURNING id, part_code, part_name, quantity as qty, quantity_box as qty_box, unit`,
       [
         vendorId,
@@ -1552,10 +1541,10 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
       ],
     );
 
-    // Update total_item dan total_pallet di vendor using optimized calculation
+
     await updateVendorTotals(client, vendorId);
 
-    // Update total_item dan total_pallet di schedule
+
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
@@ -1580,7 +1569,7 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
   }
 });
 
-// ====== BULK insert parts ======
+
 router.post("/:vendorId/parts/bulk", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1606,7 +1595,7 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
     const insertedParts = [];
 
     for (const item of items) {
-      // Support both naming conventions (camelCase and snake_case)
+
       const partCode = item.partCode || item.part_code;
       const partName = item.partName || item.part_name || "";
       const quantity = item.quantity || item.qty || 0;
@@ -1629,7 +1618,7 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
         qtyPerBox = kanbanCheck.rows[0].qty_per_box || 1;
       }
 
-      // Calculate quantity_box if not provided
+
       let finalQuantityBox = quantityBox;
       if (!quantityBox && quantity && qtyPerBox > 0) {
         finalQuantityBox = Math.ceil(Number(quantity) / qtyPerBox);
@@ -1638,17 +1627,17 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
       const result = await client.query(
         `INSERT INTO oversea_schedule_parts 
           (oversea_schedule_vendor_id, part_id, part_code, part_name, quantity, quantity_box, unit, do_number, remark, prod_date, prod_dates, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::jsonb, 'Pending') 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::jsonb, 'New')
          RETURNING id, part_code, part_name, quantity as qty, quantity_box as qty_box, unit`,
         [vendorId, partId, partCode, partName, quantity || 0, finalQuantityBox || 0, unit || "PCS", doNumber, remark, prodDate || null, prodDates ? JSON.stringify(prodDates) : "[]"]
       );
       insertedParts.push(result.rows[0]);
     }
 
-    // Update vendor totals using optimized pallet calculation
+
     await updateVendorTotals(client, vendorId);
 
-    // Update schedule totals
+
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
@@ -1665,11 +1654,11 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
   }
 });
 
-// ====== UPDATE schedule status bulk (New -> Scheduled) ======
+
 router.put("/bulk/status", async (req, res) => {
   const client = await pool.connect();
   try {
-    const { scheduleIds, status, movedByName } = req.body; // TAMBAHKAN movedByName
+    const { scheduleIds, status, movedByName } = req.body;
     console.log("[Bulk Update Status] Request:", { scheduleIds, status, movedByName });
 
     if (!scheduleIds || !Array.isArray(scheduleIds) || scheduleIds.length === 0) {
@@ -1680,15 +1669,15 @@ router.put("/bulk/status", async (req, res) => {
 
     const statusMapping = {
       New: "New",
-      Schedule: "Scheduled",
+      Schedule: "Schedule",
       Received: "Received",
       "IQC Progress": "IQC Progress",
-      Sample: "Sample",
+      Pass: "Pass",
       Complete: "Complete"
     };
     const dbStatus = statusMapping[status] || status;
 
-    // Cari employee ID jika movedByName diberikan
+
     let movedById = null;
     if (movedByName) {
       const empResult = await client.query(
@@ -1701,7 +1690,7 @@ router.put("/bulk/status", async (req, res) => {
       console.log(`[Bulk Update Status] Employee ID for ${movedByName}:`, movedById);
     }
 
-    // Update status dan upload_by jika ada movedById
+
     let result;
     if (movedById) {
       result = await client.query(
@@ -1714,7 +1703,7 @@ router.put("/bulk/status", async (req, res) => {
         [dbStatus, movedById, scheduleIds]
       );
     } else {
-      // Jika tidak ada movedByName, update status saja
+
       result = await client.query(
         `UPDATE oversea_schedules 
          SET status = $1, updated_at = CURRENT_TIMESTAMP 
@@ -1725,6 +1714,23 @@ router.put("/bulk/status", async (req, res) => {
     }
 
     console.log(`[Bulk Update Status] Updated ${result.rowCount} schedules`);
+
+    await client.query(
+      `UPDATE oversea_schedule_vendors
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE oversea_schedule_id = ANY($2::int[]) AND is_active = true`,
+      [dbStatus, scheduleIds]
+    );
+
+    await client.query(
+      `UPDATE oversea_schedule_parts
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE oversea_schedule_vendor_id IN (
+         SELECT id FROM oversea_schedule_vendors
+         WHERE oversea_schedule_id = ANY($2::int[]) AND is_active = true
+       ) AND is_active = true`,
+      [dbStatus, scheduleIds]
+    );
 
     await client.query("COMMIT");
     res.json({
@@ -1745,7 +1751,7 @@ router.put("/bulk/status", async (req, res) => {
   }
 });
 
-// ====== UPDATE vendor status (Schedule -> Received) ======
+
 router.put("/vendors/:vendorId/status", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1755,7 +1761,7 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
     await client.query("BEGIN");
 
     const vendorCheck = await client.query(
-      `SELECT osv.id, osv.oversea_schedule_id, osv.vendor_status,
+      `SELECT osv.id, osv.oversea_schedule_id, osv.status,
               os.schedule_date, os.stock_level, os.model_name
        FROM oversea_schedule_vendors osv
        LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
@@ -1771,7 +1777,7 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
     const scheduleId = vendorCheck.rows[0].oversea_schedule_id;
     const scheduleData = vendorCheck.rows[0];
 
-    const vendorStatusMapping = { Received: "Received", "IQC Progress": "IQC Progress", Sample: "Sample", Complete: "Complete" };
+    const vendorStatusMapping = { Received: "Received", "IQC Progress": "IQC Progress", Pass: "Pass", Complete: "Complete" };
     const newVendorStatus = vendorStatusMapping[status] || status;
 
     let moveById = null;
@@ -1780,24 +1786,30 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
       if (empResult.rowCount > 0) moveById = empResult.rows[0].id;
     }
 
-    // PERBAIKAN: Recalculate vendor totals SEBELUM update status
-    // Ini memastikan total_pallet yang tersimpan adalah nilai terbaru dari perhitungan
+
     console.log(`[Move Vendor] Recalculating totals for vendor ${vendorId} before moving to ${newVendorStatus}`);
     await updateVendorTotals(client, vendorId);
 
     const vendorResult = await client.query(
       `UPDATE oversea_schedule_vendors 
-       SET vendor_status = $1, move_by = $2, move_at = CURRENT_TIMESTAMP,
+       SET status = $1, move_by = $2, move_at = CURRENT_TIMESTAMP,
            schedule_date_ref = $3, stock_level_ref = $4, model_name_ref = $5, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $6 AND is_active = true 
-       RETURNING id, oversea_schedule_id, vendor_status, move_by, move_at, total_pallet, total_item`,
+       RETURNING id, oversea_schedule_id, status, move_by, move_at, total_pallet, total_item`,
       [newVendorStatus, moveById, scheduleData.schedule_date, scheduleData.stock_level, scheduleData.model_name, vendorId]
     );
 
     console.log(`[Move Vendor] Vendor ${vendorId} moved to ${newVendorStatus} with total_pallet=${vendorResult.rows[0].total_pallet}`);
 
+    await client.query(
+      `UPDATE oversea_schedule_parts
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE oversea_schedule_vendor_id = $2 AND is_active = true`,
+      [newVendorStatus, vendorId]
+    );
+
     const allVendorsCheck = await client.query(
-      `SELECT COUNT(*) as total, SUM(CASE WHEN vendor_status = $1 THEN 1 ELSE 0 END) as matched_count
+      `SELECT COUNT(*) as total, SUM(CASE WHEN status = $1 THEN 1 ELSE 0 END) as matched_count
        FROM oversea_schedule_vendors WHERE oversea_schedule_id = $2 AND is_active = true`,
       [newVendorStatus, scheduleId]
     );
@@ -1810,7 +1822,7 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
       );
     }
 
-    // PERBAIKAN: Update schedule totals setelah vendor dipindahkan
+
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
@@ -1824,7 +1836,7 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
   }
 });
 
-// ====== UPDATE PART ======
+
 router.put("/parts/:partId", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1840,12 +1852,12 @@ router.put("/parts/:partId", async (req, res) => {
       prod_date,
       prod_dates,
       updated_by,
-      updated_by_name  // Tambahkan log ini
+      updated_by_name
     });
 
     await client.query("BEGIN");
 
-    // 1. Get current part info to find vendor_id
+
     const currentPart = await client.query(
       `SELECT id, oversea_schedule_vendor_id FROM oversea_schedule_parts WHERE id = $1 AND is_active = true`,
       [partId]
@@ -1861,20 +1873,30 @@ router.put("/parts/:partId", async (req, res) => {
 
     const vendorId = currentPart.rows[0].oversea_schedule_vendor_id;
 
-    // 2. Build update query dynamically
+
     const updateFields = [];
     const updateValues = [];
     let paramCount = 1;
 
     if (quantity !== undefined) {
+      const parsedQty = quantity === '' || quantity === null ? null : parseInt(quantity, 10);
+      if (parsedQty !== null && isNaN(parsedQty)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ success: false, message: "Invalid quantity value" });
+      }
       updateFields.push(`quantity = $${paramCount}`);
-      updateValues.push(quantity);
+      updateValues.push(parsedQty);
       paramCount++;
     }
 
     if (quantityBox !== undefined) {
+      const parsedQtyBox = quantityBox === '' || quantityBox === null ? null : parseInt(quantityBox, 10);
+      if (parsedQtyBox !== null && isNaN(parsedQtyBox)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ success: false, message: "Invalid quantityBox value" });
+      }
       updateFields.push(`quantity_box = $${paramCount}`);
-      updateValues.push(quantityBox);
+      updateValues.push(parsedQtyBox);
       paramCount++;
     }
 
@@ -1916,9 +1938,9 @@ router.put("/parts/:partId", async (req, res) => {
       paramCount++;
     }
 
-    // Add updated_at
+
     updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
-    // updateValues.push(partId); // Akan ditambahkan di akhir
+
 
     if (updateFields.length === 0) {
       await client.query("ROLLBACK");
@@ -1928,10 +1950,10 @@ router.put("/parts/:partId", async (req, res) => {
       });
     }
 
-    // Add partId as last parameter
+
     updateValues.push(partId);
 
-    // 3. Update the part
+
     const result = await client.query(
       `UPDATE oversea_schedule_parts 
        SET ${updateFields.join(", ")} 
@@ -1942,10 +1964,10 @@ router.put("/parts/:partId", async (req, res) => {
 
     console.log("[UPDATE Part] Part updated:", result.rows[0]);
 
-    // 4. IMPORTANT: Recalculate vendor totals using optimized calculation
+
     await updateVendorTotals(client, vendorId);
 
-    // 5. Get schedule_id to update schedule totals
+
     const vendorInfo = await client.query(
       `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
       [vendorId]
@@ -1954,14 +1976,14 @@ router.put("/parts/:partId", async (req, res) => {
     if (vendorInfo.rowCount > 0) {
       const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
 
-      // 6. Recalculate schedule totals using optimized calculation
+
       await updateScheduleTotals(client, scheduleId);
 
-      // ====== TAMBAHKAN INI - Update upload_by di schedule ======
+
       if (updated_by_name) {
         console.log(`[UPDATE Part] Updating schedule ${scheduleId} upload_by with:`, updated_by_name);
 
-        // Cari employee ID berdasarkan nama
+
         const empResult = await client.query(
           `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
           [updated_by_name]
@@ -1970,7 +1992,7 @@ router.put("/parts/:partId", async (req, res) => {
         if (empResult.rowCount > 0) {
           const uploadById = empResult.rows[0].id;
 
-          // Update schedule dengan upload_by terbaru
+
           await client.query(
             `UPDATE oversea_schedules 
              SET upload_by = $1, updated_at = CURRENT_TIMESTAMP 
@@ -1982,7 +2004,7 @@ router.put("/parts/:partId", async (req, res) => {
           console.log(`[UPDATE Part] Employee not found for name: ${updated_by_name}`);
         }
       }
-      // ====== AKHIR TAMBAHAN ======
+
     }
 
     await client.query("COMMIT");
@@ -2007,7 +2029,7 @@ router.put("/parts/:partId", async (req, res) => {
   }
 });
 
-// ====== DELETE part ======
+
 router.delete("/parts/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2033,17 +2055,17 @@ router.delete("/parts/:id", async (req, res) => {
 
     console.log(`[DELETE Part] Deleting part ${id}...`);
 
-    // HARD DELETE - Remove from database completely
+
     const partDeleted = await client.query(
       `DELETE FROM oversea_schedule_parts WHERE id = $1`,
       [id]
     );
     console.log(`[DELETE Part] Deleted part ${id}`);
 
-    // Update vendor totals using optimized calculation
+
     await updateVendorTotals(client, vendorId);
 
-    // Update schedule totals using optimized calculation
+
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
@@ -2066,7 +2088,7 @@ router.delete("/parts/:id", async (req, res) => {
   }
 });
 
-// ====== DELETE vendor ======
+
 router.delete("/vendors/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2088,23 +2110,21 @@ router.delete("/vendors/:id", async (req, res) => {
 
     console.log(`[DELETE Vendor] Deleting vendor ${id} and all parts...`);
 
-    // HARD DELETE - Remove from database completely
-    // 1. Delete all parts (child)
+
     const partsDeleted = await client.query(
       `DELETE FROM oversea_schedule_parts WHERE oversea_schedule_vendor_id = $1`,
       [id]
     );
     console.log(`[DELETE Vendor] Deleted ${partsDeleted.rowCount} parts`);
 
-    // 2. Delete vendor (parent)
+
     const vendorDeleted = await client.query(
       `DELETE FROM oversea_schedule_vendors WHERE id = $1`,
       [id]
     );
     console.log(`[DELETE Vendor] Deleted vendor ${id}`);
 
-    // 3. Update schedule totals
-    // Update total_vendor count
+
     await client.query(
       `UPDATE oversea_schedules SET 
         total_vendor = (
@@ -2115,7 +2135,6 @@ router.delete("/vendors/:id", async (req, res) => {
       [scheduleId]
     );
 
-    // Update totals using optimized calculation
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
@@ -2141,7 +2160,6 @@ router.delete("/vendors/:id", async (req, res) => {
   }
 });
 
-// ====== DELETE schedule ======
 router.delete("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2149,7 +2167,7 @@ router.delete("/:id", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Check if schedule exists
+    
     const scheduleCheck = await client.query(
       `SELECT id FROM oversea_schedules WHERE id = $1 AND is_active = true`,
       [id]
@@ -2162,10 +2180,6 @@ router.delete("/:id", async (req, res) => {
 
     console.log(`[DELETE Schedule] Deleting schedule ${id} and all related data...`);
 
-    // HARD DELETE - Remove from database completely (cascade)
-    // Order matters: Delete child records first, then parent
-
-    // 1. Delete all parts (child of vendors)
     const partsDeleted = await client.query(
       `DELETE FROM oversea_schedule_parts 
        WHERE oversea_schedule_vendor_id IN 
@@ -2174,14 +2188,12 @@ router.delete("/:id", async (req, res) => {
     );
     console.log(`[DELETE Schedule] Deleted ${partsDeleted.rowCount} parts`);
 
-    // 2. Delete all vendors (child of schedule)
     const vendorsDeleted = await client.query(
       `DELETE FROM oversea_schedule_vendors WHERE oversea_schedule_id = $1`,
       [id]
     );
     console.log(`[DELETE Schedule] Deleted ${vendorsDeleted.rowCount} vendors`);
 
-    // 3. Delete schedule (parent)
     const scheduleDeleted = await client.query(
       `DELETE FROM oversea_schedules WHERE id = $1`,
       [id]
@@ -2212,7 +2224,6 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// ====== RECALCULATE VENDOR TOTALS ======
 router.put("/vendors/:vendorId/recalculate-totals", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2220,10 +2231,8 @@ router.put("/vendors/:vendorId/recalculate-totals", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Use optimized calculation for vendor totals
     const vendorTotals = await updateVendorTotals(client, vendorId);
 
-    // Get schedule ID untuk update schedule totals
     const vendorCheck = await client.query(
       `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
       [vendorId]
@@ -2231,8 +2240,6 @@ router.put("/vendors/:vendorId/recalculate-totals", async (req, res) => {
 
     if (vendorCheck.rowCount > 0) {
       const scheduleId = vendorCheck.rows[0].oversea_schedule_id;
-
-      // Update schedule totals using optimized calculation
       await updateScheduleTotals(client, scheduleId);
     }
 
@@ -2265,8 +2272,8 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     await client.query("BEGIN");
 
     const vendorCheck = await client.query(
-      `SELECT osv.id, osv.oversea_schedule_id, osv.vendor_status, osv.vendor_id,
-              osv.do_numbers, osv.schedule_date_ref,
+      `SELECT osv.id, osv.oversea_schedule_id, osv.status, osv.vendor_id,
+              osv.do_number, osv.schedule_date_ref,
               vd.vendor_name, os.model_name, os.stock_level as schedule_stock_level
       FROM oversea_schedule_vendors osv
       LEFT JOIN vendor_detail vd ON vd.id = osv.vendor_id
@@ -2369,9 +2376,12 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
               await client.query(
                 `UPDATE qc_checks 
                  SET status = $2,
+                     data_from = 'M136',
+                     source_vendor_id = $3,
+                     source_part_id = $4,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $1`,
-                [existingCheck.rows[0].id, 'M136 Part']
+                [existingCheck.rows[0].id, 'M136 Part', vendorId, part.id]
               );
             }
           } else {
@@ -2419,7 +2429,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
         const quantityAfter = quantityBefore + qty;
 
-        // Gabungkan semua prod_dates menjadi comma-separated text (DD/MM/YYYY, ...)
+
         const rawProdDatesOsea = typeof part.prod_dates === "string"
           ? JSON.parse(part.prod_dates)
           : Array.isArray(part.prod_dates) ? part.prod_dates : [];
@@ -2439,7 +2449,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
            VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13, $14, $15, $16, CURRENT_TIMESTAMP, true)
            RETURNING id`,
           [part.kanban_master_id, part.part_code, part.part_name, finalStockLevel, qty, quantityBefore, quantityAfter,
-            "oversea_schedule", vendorId, part.do_number || vendor.do_numbers, part.model || modelName,
+            "oversea_schedule", vendorId, part.do_number || vendor.do_number, part.model || modelName,
           part.prod_date || null, productionDatesTextOsea,
           part.remark || `Approved from oversea vendor: ${vendor.vendor_name || "Unknown"}`,
             approveById, approveByName || null]
@@ -2463,15 +2473,22 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     const vendorResult = await client.query(
       `UPDATE oversea_schedule_vendors 
-       SET vendor_status = 'IQC Progress', approve_by = $2, approve_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $1 AND is_active = true RETURNING id, oversea_schedule_id, vendor_status, approve_by, approve_at`,
+       SET status = 'IQC Progress', approve_by = $2, approve_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $1 AND is_active = true RETURNING id, oversea_schedule_id, status, approve_by, approve_at`,
       [vendorId, approveById]
+    );
+
+    await client.query(
+      `UPDATE oversea_schedule_parts
+       SET status = 'IQC Progress', updated_at = CURRENT_TIMESTAMP
+       WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
+      [vendorId]
     );
 
     await updateVendorTotals(client, vendorId);
 
     const allVendorsCheck = await client.query(
-      `SELECT COUNT(*) as total, SUM(CASE WHEN vendor_status = 'IQC Progress' THEN 1 ELSE 0 END) as matched_count
+      `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'IQC Progress' THEN 1 ELSE 0 END) as matched_count
        FROM oversea_schedule_vendors WHERE oversea_schedule_id = $1 AND is_active = true`,
       [scheduleId]
     );
@@ -2486,7 +2503,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     await updateScheduleTotals(client, scheduleId);
 
-    const allPartsSampleCheck = await client.query(
+    const allPartsPassCheck = await client.query(
       `SELECT COALESCE(sample_dates::jsonb, '[]'::jsonb) as sample_dates
        FROM oversea_schedule_parts
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
@@ -2494,7 +2511,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     );
 
     let allPartsPass = true;
-    for (const part of allPartsSampleCheck.rows) {
+    for (const part of allPartsPassCheck.rows) {
       const sampleDates = part.sample_dates || [];
       if (sampleDates.length > 0) {
         allPartsPass = false;
@@ -2502,19 +2519,26 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       }
     }
 
-    if (allPartsPass && allPartsSampleCheck.rowCount > 0) {
+    if (allPartsPass && allPartsPassCheck.rowCount > 0) {
       console.log(`[Approve Vendor] All parts PASS! Moving vendor ${vendorId} directly to Pass`);
 
       await client.query(
         `UPDATE oversea_schedule_vendors 
-         SET vendor_status = 'Sample', updated_at = CURRENT_TIMESTAMP 
+         SET status = 'Pass', updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true`,
+        [vendorId]
+      );
+
+      await client.query(
+        `UPDATE oversea_schedule_parts
+         SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
+         WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
         [vendorId]
       );
 
       const allVendorsPassCheck = await client.query(
         `SELECT COUNT(*) as total, 
-                SUM(CASE WHEN vendor_status = 'Pass' THEN 1 ELSE 0 END) as pass_count
+                SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as pass_count
          FROM oversea_schedule_vendors 
          WHERE oversea_schedule_id = $1 AND is_active = true`,
         [scheduleId]
@@ -2524,7 +2548,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       if (parseInt(totalVendors) > 0 && parseInt(totalVendors) === parseInt(pass_count)) {
         await client.query(
           `UPDATE oversea_schedules 
-           SET status = 'Sample', updated_at = CURRENT_TIMESTAMP 
+           SET status = 'Pass', updated_at = CURRENT_TIMESTAMP 
            WHERE id = $1 AND is_active = true`,
           [scheduleId]
         );
@@ -2532,7 +2556,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       }
     }
 
-    // ==================== PERBAIKAN UTAMA ====================
+
     const today = new Date();
     const yy = String(today.getFullYear()).slice(-2);
     const mm = String(today.getMonth() + 1).padStart(2, '0');
@@ -2543,7 +2567,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       const qtyBox = parseInt(part.quantity_box) || 0;
       if (qtyBox <= 0) continue;
 
-      // Pastikan part.kanban_master_id ada
+
       let partId = part.kanban_master_id;
       if (!partId) {
         const partIdRes = await client.query(
@@ -2558,7 +2582,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         }
       }
 
-      // Ambil qty_per_box dari master
+
       let qtyPerBoxMaster = 1;
       const masterRes = await client.query(
         `SELECT qty_per_box FROM kanban_master WHERE id = $1`,
@@ -2568,7 +2592,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         qtyPerBoxMaster = masterRes.rows[0].qty_per_box;
       }
 
-      // Dapatkan urutan terakhir GLOBAL untuk part ini (tanpa filter tanggal)
+
       const seqRes = await client.query(
         `SELECT COALESCE(MAX(CAST(SUBSTRING(label_id, 13) AS INTEGER)), 0) as max_seq
          FROM storage_inventory
@@ -2584,17 +2608,17 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         const seqStr = String(nextSeq).padStart(6, '0');
         const labelId = datePrefix + partId + seqStr;
 
-        // Tentukan qty untuk box ini
+
         let boxQty;
         if (i < qtyBox) {
           boxQty = qtyPerBoxMaster;
         } else {
-          // Box terakhir: sisa
+
           boxQty = totalQty - (qtyPerBoxMaster * (qtyBox - 1));
-          if (boxQty < 0) boxQty = 0; // antisipasi data error
+          if (boxQty < 0) boxQty = 0;
         }
 
-        // Insert ke storage_inventory dengan stock_level = 'M136'
+
         await client.query(
           `INSERT INTO storage_inventory (
             label_id, part_id, part_code, part_name, qty,
@@ -2610,7 +2634,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
             vendor.vendor_id,
             vendor.vendor_name,
             part.model || vendor.model_name,
-            'M136', // ← PERBAIKAN: stock_level selalu 'M136'
+            'M136',
             vendor.schedule_date_ref,
             approveById,
             approveByName
@@ -2619,12 +2643,16 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       }
     }
 
+    const finalVendorStatus = allPartsPass && allPartsPassCheck.rowCount > 0
+      ? 'Pass'
+      : 'IQC Progress';
+
     await client.query("COMMIT");
     res.json({
       success: true,
       message: "Vendor approved and parts added to stock",
       data: {
-        vendor: vendorResult.rows[0],
+        vendor: { ...vendorResult.rows[0], status: finalVendorStatus },
         stockLevel: finalStockLevel,
         stockMovements: stockResults
       }
@@ -2638,7 +2666,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
   }
 });
 
-// ====== MOVE VENDOR TO SAMPLE/PASS (from IQC Progress) ======
+
 router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2647,7 +2675,7 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Get employee ID from name
+
     let sampleById = null;
     if (moveByName) {
       const empResult = await client.query(
@@ -2659,15 +2687,15 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
       }
     }
 
-    // Update vendor status to Sample with sample_by and sample_at
+
     const vendorResult = await client.query(
       `UPDATE oversea_schedule_vendors 
-       SET vendor_status = 'Sample', 
+       SET status = 'Pass', 
            sample_by = $2,
            sample_at = CURRENT_TIMESTAMP,
            updated_at = CURRENT_TIMESTAMP 
        WHERE id = $1 AND is_active = true 
-       RETURNING id, oversea_schedule_id, vendor_status, sample_by, sample_at`,
+       RETURNING id, oversea_schedule_id, status, sample_by, sample_at`,
       [vendorId, sampleById],
     );
 
@@ -2681,7 +2709,14 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
 
     const scheduleId = vendorResult.rows[0].oversea_schedule_id;
 
-    // PERBAIKAN: Recalculate vendor dan schedule totals
+
+    await client.query(
+      `UPDATE oversea_schedule_parts
+       SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
+       WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
+      [vendorId]
+    );
+
     await updateVendorTotals(client, vendorId);
     await updateScheduleTotals(client, scheduleId);
 
@@ -2705,7 +2740,7 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
   }
 });
 
-// ====== MOVE VENDOR TO COMPLETE (from Pass/Sample) ======
+
 router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2714,7 +2749,7 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Get employee ID from name
+
     let completeById = null;
     if (moveByName) {
       const empResult = await client.query(
@@ -2726,15 +2761,15 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
       }
     }
 
-    // Update vendor status to Complete
+
     const vendorResult = await client.query(
       `UPDATE oversea_schedule_vendors 
-       SET vendor_status = 'Complete', 
+       SET status = 'Complete', 
            complete_by = $2,
            complete_at = CURRENT_TIMESTAMP,
            updated_at = CURRENT_TIMESTAMP 
        WHERE id = $1 AND is_active = true 
-       RETURNING id, oversea_schedule_id, vendor_status, complete_by, complete_at`,
+       RETURNING id, oversea_schedule_id, status, complete_by, complete_at`,
       [vendorId, completeById],
     );
 
@@ -2748,7 +2783,27 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
 
     const scheduleId = vendorResult.rows[0].oversea_schedule_id;
 
-    // PERBAIKAN: Recalculate vendor dan schedule totals
+
+    await client.query(
+      `UPDATE oversea_schedule_parts
+       SET status = 'Complete', updated_at = CURRENT_TIMESTAMP
+       WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
+      [vendorId]
+    );
+
+    const allVendorsCompleteCheck = await client.query(
+      `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'Complete' THEN 1 ELSE 0 END) as complete_count
+       FROM oversea_schedule_vendors WHERE oversea_schedule_id = $1 AND is_active = true`,
+      [scheduleId]
+    );
+    const { total: totalV, complete_count } = allVendorsCompleteCheck.rows[0];
+    if (parseInt(totalV) > 0 && parseInt(totalV) === parseInt(complete_count)) {
+      await client.query(
+        `UPDATE oversea_schedules SET status = 'Complete', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND is_active = true`,
+        [scheduleId]
+      );
+    }
+
     await updateVendorTotals(client, vendorId);
     await updateScheduleTotals(client, scheduleId);
 
@@ -2772,7 +2827,7 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
   }
 });
 
-// ====== UPDATE schedule ======
+
 router.put("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
