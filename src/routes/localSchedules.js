@@ -1,9 +1,7 @@
-// routes/localSchedules.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-// helper functions
 const toStartOfDay = (val) => {
   const d = new Date(val);
   if (Number.isNaN(d.getTime())) return null;
@@ -19,7 +17,6 @@ const resolveEmployeeId = async (client, empName) => {
   return q.rows[0]?.id ?? null;
 };
 
-// ====== CREATE header schedule (New) ======
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -54,7 +51,6 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ====== CHECK schedule date ======
 router.get("/check-date", async (req, res) => {
   try {
     const { scheduleDate } = req.query;
@@ -63,7 +59,6 @@ router.get("/check-date", async (req, res) => {
       return res.status(400).json({ message: "scheduleDate is required" });
     }
 
-    // Validasi format date
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(scheduleDate)) {
       return res
@@ -98,7 +93,6 @@ router.get("/check-date", async (req, res) => {
   }
 });
 
-// ====== GET all local schedules ======
 router.get("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -107,14 +101,13 @@ router.get("/", async (req, res) => {
 
     console.log("[GET Local Schedules] Query params:", req.query);
 
-    // Mapping status untuk frontend tabs
     const statusMapping = {
       New: "New",
-      Schedule: "Scheduled",
+      Schedule: "Schedule",
       Today: "Today",
       Received: "Received",
       "IQC Progress": "IQC Progress",
-      Sample: "Sample",
+      Pass: "Pass",
       Complete: "Complete",
       History: "History",
     };
@@ -142,14 +135,12 @@ router.get("/", async (req, res) => {
     const params = [];
     let paramCount = 0;
 
-    // Filter berdasarkan status yang dipetakan
     if (status && statusMapping[status]) {
       paramCount++;
       query += ` AND ls.status = $${paramCount}`;
       params.push(statusMapping[status]);
     }
 
-    // Filter berdasarkan tanggal
     if (date_from) {
       paramCount++;
       query += ` AND ls.schedule_date >= $${paramCount}`;
@@ -171,20 +162,19 @@ router.get("/", async (req, res) => {
 
     console.log(`[GET Local Schedules] Found ${result.rows.length} schedules`);
 
-    // Untuk setiap schedule, ambil vendor dan parts
     const schedulesWithDetails = await Promise.all(
       result.rows.map(async (schedule) => {
-        // Get vendors (dengan vendor_status, move_by, move_at)
+
         const vendorsResult = await client.query(
           `SELECT 
             lsv.id,
             lsv.trip_id,
             lsv.vendor_id,
-            lsv.do_numbers,
+            lsv.do_number,
             lsv.arrival_time,
             lsv.total_pallet,
             lsv.total_item,
-            lsv.vendor_status,
+            lsv.status,
             lsv.move_by,
             lsv.move_at,
             lsv.schedule_date_ref,
@@ -203,19 +193,15 @@ router.get("/", async (req, res) => {
           [schedule.id],
         );
 
-        // Filter vendor by tab status:
-        // Today tab: exclude vendor yang sudah dipindah ke tab lain
-        // (Received, IQC Progress, Sample, Complete)
-        // New dan Schedule: tampilkan semua vendor
         const mappedStatus = statusMapping[status];
-        const movedStatuses = ['Received', 'IQC Progress', 'Sample', 'Complete'];
+        const movedStatuses = ['Received', 'IQC Progress', 'Pass', 'Complete'];
         let filteredVendors = vendorsResult.rows;
         if (mappedStatus === 'Today') {
           filteredVendors = filteredVendors.filter(
-            (v) => !movedStatuses.includes(v.vendor_status),
+            (v) => !movedStatuses.includes(v.status),
           );
         }
-        // Filter vendor berdasarkan nama jika ada filter
+
         if (vendor_name) {
           filteredVendors = filteredVendors.filter(
             (vendor) =>
@@ -228,7 +214,6 @@ router.get("/", async (req, res) => {
           );
         }
 
-        // Get parts untuk setiap vendor (dengan remark dan prod_date)
         const vendorsWithParts = await Promise.all(
           filteredVendors.map(async (vendor) => {
             const partsResult = await client.query(
@@ -250,7 +235,6 @@ router.get("/", async (req, res) => {
               [vendor.id],
             );
 
-            // Parse prod_dates and sample_dates from JSON
             const partsWithParsedDates = partsResult.rows.map((part) => ({
               ...part,
               prod_dates:
@@ -267,7 +251,6 @@ router.get("/", async (req, res) => {
                     : [],
             }));
 
-            // Filter parts jika ada filter
             let filteredParts = partsWithParsedDates;
             if (part_code) {
               filteredParts = filteredParts.filter((part) =>
@@ -288,25 +271,22 @@ router.get("/", async (req, res) => {
           }),
         );
 
-        // Hanya return schedule jika ada vendor setelah filter
-        // atau jika tidak ada filter vendor/part
         if (vendor_name || part_code || part_name) {
           const hasVendorsWithParts = vendorsWithParts.some(
             (vendor) => vendor.parts.length > 0,
           );
           if (!hasVendorsWithParts && vendorsWithParts.length === 0) {
-            return null; // Skip schedule ini
+            return null;
           }
         }
 
         return {
           ...schedule,
-          vendors: vendorsWithParts.filter((v) => v), // Hapus null jika ada
+          vendors: vendorsWithParts.filter((v) => v),
         };
       }),
     );
 
-    // Filter out null schedules
     const filteredSchedules = schedulesWithDetails.filter(
       (schedule) => schedule !== null,
     );
@@ -328,24 +308,22 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ====== GET vendors for Received tab (flat list without schedule header) ======
 router.get("/received-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
     console.log("[GET Received Vendors] Fetching vendors with Received status");
 
-    // Get all vendors with vendor_status = 'Received'
     const vendorsResult = await client.query(
       `SELECT 
         lsv.id,
         lsv.local_schedule_id,
         lsv.trip_id,
         lsv.vendor_id,
-        lsv.do_numbers,
+        lsv.do_number,
         lsv.arrival_time,
         lsv.total_pallet,
         lsv.total_item,
-        lsv.vendor_status,
+        lsv.status,
         lsv.move_by,
         lsv.move_at,
         TO_CHAR(lsv.schedule_date_ref, 'YYYY-MM-DD') as schedule_date,
@@ -359,7 +337,7 @@ router.get("/received-vendors", async (req, res) => {
        LEFT JOIN trips t ON t.id = lsv.trip_id
        LEFT JOIN vendor_detail vd ON vd.id = lsv.vendor_id
        LEFT JOIN employees em ON em.id = lsv.move_by
-       WHERE lsv.vendor_status = 'Received' AND lsv.is_active = true
+       WHERE lsv.status = 'Received' AND lsv.is_active = true
        ORDER BY lsv.move_at DESC, lsv.id ASC`,
     );
 
@@ -367,7 +345,6 @@ router.get("/received-vendors", async (req, res) => {
       `[GET Received Vendors] Found ${vendorsResult.rows.length} vendors`,
     );
 
-    // Get parts for each vendor
     const vendorsWithParts = await Promise.all(
       vendorsResult.rows.map(async (vendor) => {
         const partsResult = await client.query(
@@ -389,7 +366,6 @@ router.get("/received-vendors", async (req, res) => {
           [vendor.id],
         );
 
-        // Parse prod_dates and sample_dates from JSON
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
           prod_dates:
@@ -430,7 +406,6 @@ router.get("/received-vendors", async (req, res) => {
   }
 });
 
-// ====== GET all vendors with IQC Progress status ======
 router.get("/iqc-progress-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -438,18 +413,17 @@ router.get("/iqc-progress-vendors", async (req, res) => {
       "[GET IQC Progress Vendors] Fetching vendors with IQC Progress status",
     );
 
-    // Get all vendors with vendor_status = 'IQC Progress'
     const vendorsResult = await client.query(
       `SELECT 
         lsv.id,
         lsv.local_schedule_id,
         lsv.trip_id,
         lsv.vendor_id,
-        lsv.do_numbers,
+        lsv.do_number,
         lsv.arrival_time,
         lsv.total_pallet,
         lsv.total_item,
-        lsv.vendor_status,
+        lsv.status,
         lsv.approve_by,
         lsv.approve_at,
         TO_CHAR(lsv.schedule_date_ref, 'YYYY-MM-DD') as schedule_date,
@@ -463,7 +437,7 @@ router.get("/iqc-progress-vendors", async (req, res) => {
        LEFT JOIN trips t ON t.id = lsv.trip_id
        LEFT JOIN vendor_detail vd ON vd.id = lsv.vendor_id
        LEFT JOIN employees em ON em.id = lsv.approve_by
-       WHERE lsv.vendor_status = 'IQC Progress' AND lsv.is_active = true
+       WHERE lsv.status = 'IQC Progress' AND lsv.is_active = true
        ORDER BY lsv.approve_at DESC, lsv.id ASC`,
     );
 
@@ -471,7 +445,6 @@ router.get("/iqc-progress-vendors", async (req, res) => {
       `[GET IQC Progress Vendors] Found ${vendorsResult.rows.length} vendors`,
     );
 
-    // Get parts for each vendor
     const vendorsWithParts = await Promise.all(
       vendorsResult.rows.map(async (vendor) => {
         const partsResult = await client.query(
@@ -494,7 +467,6 @@ router.get("/iqc-progress-vendors", async (req, res) => {
           [vendor.id],
         );
 
-        // Parse prod_dates and sample_dates from JSON
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
           prod_dates:
@@ -535,24 +507,22 @@ router.get("/iqc-progress-vendors", async (req, res) => {
   }
 });
 
-// ====== GET all vendors with Sample status ======
-router.get("/sample-vendors", async (req, res) => {
+router.get("/pass-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
-    console.log("[GET Sample Vendors] Fetching vendors with Sample status");
+    console.log("[GET Pass Vendors] Fetching vendors with Pass status");
 
-    // Get all vendors with vendor_status = 'Sample'
     const vendorsResult = await client.query(
       `SELECT 
         lsv.id,
         lsv.local_schedule_id,
         lsv.trip_id,
         lsv.vendor_id,
-        lsv.do_numbers,
+        lsv.do_number,
         lsv.arrival_time,
         lsv.total_pallet,
         lsv.total_item,
-        lsv.vendor_status,
+        lsv.status,
         lsv.sample_by,
         lsv.sample_at,
         TO_CHAR(lsv.schedule_date_ref, 'YYYY-MM-DD') as schedule_date,
@@ -566,15 +536,14 @@ router.get("/sample-vendors", async (req, res) => {
        LEFT JOIN trips t ON t.id = lsv.trip_id
        LEFT JOIN vendor_detail vd ON vd.id = lsv.vendor_id
        LEFT JOIN employees em ON em.id = lsv.sample_by
-       WHERE lsv.vendor_status = 'Sample' AND lsv.is_active = true
+       WHERE lsv.status = 'Pass' AND lsv.is_active = true
        ORDER BY lsv.sample_at DESC, lsv.id ASC`,
     );
 
     console.log(
-      `[GET Sample Vendors] Found ${vendorsResult.rows.length} vendors`,
+      `[GET Pass Vendors] Found ${vendorsResult.rows.length} vendors`,
     );
 
-    // Get parts for each vendor
     const vendorsWithParts = await Promise.all(
       vendorsResult.rows.map(async (vendor) => {
         const partsResult = await client.query(
@@ -597,7 +566,6 @@ router.get("/sample-vendors", async (req, res) => {
           [vendor.id],
         );
 
-        // Parse prod_dates and sample_dates for each part
         const partsWithParsedDates = partsResult.rows.map((part) => {
           let parsedProdDates = [];
           if (part.prod_dates) {
@@ -608,25 +576,25 @@ router.get("/sample-vendors", async (req, res) => {
                 parsedProdDates = part.prod_dates;
               }
             } catch (e) {
-              console.error("[GET Sample Vendors] Error parsing prod_dates:", e);
+              console.error("[GET Pass Vendors] Error parsing prod_dates:", e);
             }
           }
-          let parsedSampleDates = [];
+          let parsedPassDates = [];
           if (part.sample_dates) {
             try {
               if (typeof part.sample_dates === "string") {
-                parsedSampleDates = JSON.parse(part.sample_dates);
+                parsedPassDates = JSON.parse(part.sample_dates);
               } else if (Array.isArray(part.sample_dates)) {
-                parsedSampleDates = part.sample_dates;
+                parsedPassDates = part.sample_dates;
               }
             } catch (e) {
-              console.error("[GET Sample Vendors] Error parsing sample_dates:", e);
+              console.error("[GET Pass Vendors] Error parsing sample_dates:", e);
             }
           }
           return {
             ...part,
             prod_dates: parsedProdDates,
-            sample_dates: parsedSampleDates,
+            sample_dates: parsedPassDates,
           };
         });
 
@@ -643,7 +611,7 @@ router.get("/sample-vendors", async (req, res) => {
       total: vendorsWithParts.length,
     });
   } catch (error) {
-    console.error("[GET Sample Vendors] Error:", error);
+    console.error("[GET Pass Vendors] Error:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -654,7 +622,6 @@ router.get("/sample-vendors", async (req, res) => {
   }
 });
 
-// ====== GET all vendors with Complete status ======
 router.get("/complete-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -666,11 +633,11 @@ router.get("/complete-vendors", async (req, res) => {
         lsv.local_schedule_id,
         lsv.trip_id,
         lsv.vendor_id,
-        lsv.do_numbers,
+        lsv.do_number,
         lsv.arrival_time,
         lsv.total_pallet,
         lsv.total_item,
-        lsv.vendor_status,
+        lsv.status,
         lsv.complete_by,
         lsv.complete_at,
         TO_CHAR(lsv.schedule_date_ref, 'YYYY-MM-DD') as schedule_date,
@@ -684,7 +651,7 @@ router.get("/complete-vendors", async (req, res) => {
        LEFT JOIN trips t ON t.id = lsv.trip_id
        LEFT JOIN vendor_detail vd ON vd.id = lsv.vendor_id
        LEFT JOIN employees em ON em.id = lsv.complete_by
-       WHERE lsv.vendor_status = 'Complete' AND lsv.is_active = true
+       WHERE lsv.status = 'Complete' AND lsv.is_active = true
        ORDER BY lsv.complete_at DESC, lsv.id ASC`,
     );
 
@@ -714,7 +681,6 @@ router.get("/complete-vendors", async (req, res) => {
           [vendor.id],
         );
 
-        // Parse prod_dates and sample_dates for each part
         const partsWithParsedDates = partsResult.rows.map((part) => {
           let parsedProdDates = [];
           if (part.prod_dates) {
@@ -728,13 +694,13 @@ router.get("/complete-vendors", async (req, res) => {
               console.error("[GET Complete Vendors] Error parsing prod_dates:", e);
             }
           }
-          let parsedSampleDates = [];
+          let parsedPassDates = [];
           if (part.sample_dates) {
             try {
               if (typeof part.sample_dates === "string") {
-                parsedSampleDates = JSON.parse(part.sample_dates);
+                parsedPassDates = JSON.parse(part.sample_dates);
               } else if (Array.isArray(part.sample_dates)) {
-                parsedSampleDates = part.sample_dates;
+                parsedPassDates = part.sample_dates;
               }
             } catch (e) {
               console.error("[GET Complete Vendors] Error parsing sample_dates:", e);
@@ -743,7 +709,7 @@ router.get("/complete-vendors", async (req, res) => {
           return {
             ...part,
             prod_dates: parsedProdDates,
-            sample_dates: parsedSampleDates,
+            sample_dates: parsedPassDates,
           };
         });
 
@@ -771,7 +737,6 @@ router.get("/complete-vendors", async (req, res) => {
   }
 });
 
-// ====== GET all local schedules dengan filter status ======
 router.get("/with-status", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -801,7 +766,6 @@ router.get("/with-status", async (req, res) => {
 
     const params = [];
 
-    // Filter berdasarkan status
     if (status && status !== "All") {
       query += ` AND ls.status = $1`;
       params.push(status);
@@ -815,20 +779,19 @@ router.get("/with-status", async (req, res) => {
 
     console.log(`[GET Local Schedules] Found ${result.rows.length} schedules`);
 
-    // Untuk setiap schedule, ambil vendor dan parts
     const schedulesWithDetails = await Promise.all(
       result.rows.map(async (schedule) => {
-        // Get vendors (dengan vendor_status)
+
         const vendorsResult = await client.query(
           `SELECT 
             lsv.id,
             lsv.trip_id,
             lsv.vendor_id,
-            lsv.do_numbers,
+            lsv.do_number,
             lsv.arrival_time,
             lsv.total_pallet,
             lsv.total_item,
-            lsv.vendor_status,
+            lsv.status,
             lsv.move_by,
             lsv.move_at,
             t.trip_code as trip_no,
@@ -844,7 +807,6 @@ router.get("/with-status", async (req, res) => {
           [schedule.id],
         );
 
-        // Get parts untuk setiap vendor (dengan remark dan prod_date)
         const vendorsWithParts = await Promise.all(
           vendorsResult.rows.map(async (vendor) => {
             const partsResult = await client.query(
@@ -895,7 +857,6 @@ router.get("/with-status", async (req, res) => {
   }
 });
 
-// ====== GET qty_per_box from kanban_master ======
 router.get("/parts/qty-per-box/:partCode", async (req, res) => {
   try {
     const { partCode } = req.params;
@@ -913,7 +874,7 @@ router.get("/parts/qty-per-box/:partCode", async (req, res) => {
     } else {
       res.json({
         success: true,
-        qty_per_box: 1, // Default value
+        qty_per_box: 1,
       });
     }
   } catch (error) {
@@ -926,7 +887,6 @@ router.get("/parts/qty-per-box/:partCode", async (req, res) => {
   }
 });
 
-// ====== UPDATE multiple schedules status (BULK) ======
 router.put("/bulk/status", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -938,7 +898,6 @@ router.put("/bulk/status", async (req, res) => {
       body: req.body,
     });
 
-    // Validasi input
     if (
       !scheduleIds ||
       !Array.isArray(scheduleIds) ||
@@ -959,14 +918,13 @@ router.put("/bulk/status", async (req, res) => {
       });
     }
 
-    // Mapping tab ke status database
     const tabToStatusMapping = {
       New: "New",
-      Schedule: "Scheduled",
+      Schedule: "Schedule",
       Today: "Today",
       Received: "Received",
       "IQC Progress": "IQC Progress",
-      Sample: "Sample",
+      Pass: "Pass",
       Complete: "Complete",
       History: "History",
     };
@@ -989,7 +947,6 @@ router.put("/bulk/status", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek schedules yang akan diupdate
     const checkResult = await client.query(
       `SELECT id, schedule_code, status 
        FROM local_schedules 
@@ -1016,6 +973,23 @@ router.put("/bulk/status", async (req, res) => {
       WHERE id = ANY($2::int[]) AND is_active = true
       RETURNING id, schedule_code, status, TO_CHAR(schedule_date, 'YYYY-MM-DD') as schedule_date`,
       [finalStatus, scheduleIds],
+    );
+
+    await client.query(
+      `UPDATE local_schedule_vendors
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE local_schedule_id = ANY($2::int[]) AND is_active = true`,
+      [finalStatus, scheduleIds]
+    );
+
+    await client.query(
+      `UPDATE local_schedule_parts
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE local_schedule_vendor_id IN (
+         SELECT id FROM local_schedule_vendors
+         WHERE local_schedule_id = ANY($2::int[]) AND is_active = true
+       ) AND is_active = true`,
+      [finalStatus, scheduleIds]
     );
 
     console.log(
@@ -1048,8 +1022,6 @@ router.put("/bulk/status", async (req, res) => {
   }
 });
 
-// PUT /api/local-schedules/parts/:id
-// Update untuk menerima prod_dates (array)
 router.put("/parts/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1064,11 +1036,11 @@ router.put("/parts/:id", async (req, res) => {
       unit,
       remark,
       prod_date,
-      prod_dates,   // Array of dates
-      sample_dates, // Array of dates yang perlu sampling (disimpan frozen saat approve)
+      prod_dates,
+      sample_dates,
       status,
-      upload_by_id,  // ID dari JWT payload — update upload_by di local_schedules (Today tab)
-      approve_by_id, // ID dari JWT payload — update approve_by di local_schedule_vendors (IQC Progress tab)
+      upload_by_id,
+      approve_by_id,
     } = req.body;
 
     const updateFields = [];
@@ -1097,18 +1069,18 @@ router.put("/parts/:id", async (req, res) => {
     }
     if (remark !== undefined) {
       updateFields.push(`remark = $${paramIndex++}`);
-      values.push(remark);
+      values.push(remark === null || remark === 'null' || remark === '[null]' || remark === '[default]' ? '' : remark);
     }
     if (prod_date !== undefined) {
       updateFields.push(`prod_date = $${paramIndex++}`);
       values.push(prod_date);
     }
-    // Handle prod_dates array
+
     if (prod_dates !== undefined) {
       updateFields.push(`prod_dates = $${paramIndex++}`);
       values.push(JSON.stringify(prod_dates));
     }
-    // Handle sample_dates array (frozen — disimpan saat vendor approve di Received tab)
+
     if (sample_dates !== undefined) {
       updateFields.push(`sample_dates = $${paramIndex++}`);
       values.push(JSON.stringify(sample_dates));
@@ -1142,9 +1114,8 @@ router.put("/parts/:id", async (req, res) => {
         .json({ success: false, message: "Part not found" });
     }
 
-    // Update Upload By & updated_at di parent local_schedules ketika ada upload_by_id
     if (upload_by_id) {
-      // Cari schedule_id melalui part → vendor → schedule
+
       const scheduleResult = await client.query(
         `SELECT lsv.local_schedule_id
          FROM local_schedule_parts lsp
@@ -1165,8 +1136,6 @@ router.put("/parts/:id", async (req, res) => {
       }
     }
 
-    // Update Approve By & approve_at di local_schedule_vendors (IQC Progress tab)
-    // ketika ada approve_by_id — ini update kolom Approve By yang tampil di IQC Progress
     if (approve_by_id) {
       const vendorResult = await client.query(
         `SELECT lsp.local_schedule_vendor_id
@@ -1198,7 +1167,6 @@ router.put("/parts/:id", async (req, res) => {
   }
 });
 
-// ====== UPDATE VENDOR STATUS (untuk move per vendor ke Received) ======
 router.put("/vendors/:vendorId/status", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1220,9 +1188,8 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek apakah vendor exists dan dapatkan schedule_id
     const vendorCheck = await client.query(
-      `SELECT lsv.id, lsv.local_schedule_id, lsv.vendor_status,
+      `SELECT lsv.id, lsv.local_schedule_id, lsv.status,
               ls.schedule_date, ls.stock_level, ls.model_name
        FROM local_schedule_vendors lsv
        JOIN local_schedules ls ON ls.id = lsv.local_schedule_id
@@ -1243,18 +1210,16 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
     const stockLevel = vendorCheck.rows[0].stock_level;
     const modelName = vendorCheck.rows[0].model_name;
 
-    // Resolve move_by employee ID
     let moveById = null;
     if (moveByName) {
       moveById = await resolveEmployeeId(client, moveByName);
     }
 
-    // Update vendor status with move_by, move_at, and reference fields
     let vendorResult;
     if (status === "Received") {
       vendorResult = await client.query(
         `UPDATE local_schedule_vendors 
-         SET vendor_status = $1, 
+         SET status = $1, 
              move_by = $2,
              move_at = CURRENT_TIMESTAMP,
              schedule_date_ref = $3::date,
@@ -1262,25 +1227,31 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
              model_name_ref = $5,
              updated_at = CURRENT_TIMESTAMP 
          WHERE id = $6 AND is_active = true 
-         RETURNING id, local_schedule_id, vendor_status, move_by, move_at`,
+         RETURNING id, local_schedule_id, status, move_by, move_at`,
         [status, moveById, scheduleDate, stockLevel, modelName, vendorId],
       );
     } else {
       vendorResult = await client.query(
         `UPDATE local_schedule_vendors 
-         SET vendor_status = $1, updated_at = CURRENT_TIMESTAMP 
+         SET status = $1, updated_at = CURRENT_TIMESTAMP 
          WHERE id = $2 AND is_active = true 
-         RETURNING id, local_schedule_id, vendor_status`,
+         RETURNING id, local_schedule_id, status`,
         [status, vendorId],
       );
     }
 
     console.log(`[UPDATE Vendor Status] Vendor updated:`, vendorResult.rows[0]);
 
-    // Cek apakah semua vendor di schedule sudah status yang sama
+    await client.query(
+      `UPDATE local_schedule_parts
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE local_schedule_vendor_id = $2 AND is_active = true`,
+      [status, vendorId]
+    );
+
     const allVendorsCheck = await client.query(
       `SELECT COUNT(*) as total, 
-              SUM(CASE WHEN vendor_status = $1 THEN 1 ELSE 0 END) as matched_count
+              SUM(CASE WHEN status = $1 THEN 1 ELSE 0 END) as matched_count
        FROM local_schedule_vendors 
        WHERE local_schedule_id = $2 AND is_active = true`,
       [status, scheduleId],
@@ -1293,13 +1264,12 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
       matched_count: parseInt(matched_count),
     });
 
-    // Jika semua vendor sudah status yang sama, update schedule status juga
     if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
-      // Map vendor status ke schedule status
+
       const scheduleStatusMapping = {
         Received: "Received",
         "IQC Progress": "IQC Progress",
-        Sample: "Sample",
+        Pass: "Pass",
         Complete: "Complete",
       };
 
@@ -1343,7 +1313,6 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
   }
 });
 
-// ====== APPROVE VENDOR (move from Received to IQC Progress or Complete) ======
 router.put("/vendors/:vendorId/approve", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1354,14 +1323,13 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Cek vendor dan ambil info schedule + stock_level
     const vendorCheck = await client.query(
       `SELECT 
         lsv.id, 
         lsv.local_schedule_id, 
-        lsv.vendor_status,
+        lsv.status,
         lsv.vendor_id,
-        lsv.do_numbers,
+        lsv.do_number,
         TO_CHAR(lsv.schedule_date_ref, 'YYYY-MM-DD') as schedule_date_ref,
         lsv.stock_level_ref,
         vd.vendor_name,
@@ -1383,9 +1351,8 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     const scheduleId = vendor.local_schedule_id;
     const modelName = vendor.model_name;
 
-    // EXTRACT stock level: "M101 | SCN-MH" -> "M101"
     let rawStockLevel = vendor.schedule_stock_level || "";
-    let finalStockLevel = "M101"; // default untuk local schedule
+    let finalStockLevel = "M101";
     console.log(`[APPROVE Vendor] Raw stock_level from DB: "${rawStockLevel}"`);
     if (rawStockLevel) {
       const parts = rawStockLevel.split("|");
@@ -1394,12 +1361,11 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         if (["M101", "M136", "RTV"].includes(code)) {
           finalStockLevel = code;
         }
-        // M1Y2 tidak ada di kanban_master, skip (tetap M101 default)
+
       }
     }
     console.log(`[APPROVE Vendor] Final stock level: "${finalStockLevel}"`);
 
-    // 2. Get employee ID from name
     let approveById = null;
     if (approveByName) {
       const empResult = await client.query(
@@ -1409,7 +1375,6 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       if (empResult.rowCount > 0) approveById = empResult.rows[0].id;
     }
 
-    // 3. Get all parts for this vendor (termasuk prod_dates)
     const partsResult = await client.query(
       `SELECT 
         lsp.id,
@@ -1434,7 +1399,6 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     console.log(`[APPROVE Vendor] Found ${partsResult.rowCount} parts`);
 
-    // 4. Cek prod_dates vs qc_checks Complete (untuk menentukan apakah perlu IQC atau langsung Complete)
     const qcChecksResult = await client.query(
       `SELECT part_code, TO_CHAR(production_date, 'YYYY-MM-DD') as production_date, status
        FROM qc_checks
@@ -1453,7 +1417,6 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       );
     };
 
-    // Cek apakah semua part sudah PASS (tidak ada incomplete prod_dates)
     let allPartsPass = true;
     for (const part of partsResult.rows) {
       const prodDates = typeof part.prod_dates === "string"
@@ -1471,12 +1434,10 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
           break;
         }
       }
-      // Part tanpa prod_dates dianggap tidak perlu sampling
+
     }
     console.log(`[APPROVE Vendor] All parts PASS (no sampling needed): ${allPartsPass}`);
 
-    // 4b. Jika ada incomplete prod_dates → insert ke qc_checks dengan status 'M101 Part'
-    //     (Mirip oversea yang insert 'M136 Part') → muncul di QCCheckPage tab M101 Part
     if (!allPartsPass) {
       for (const part of partsResult.rows) {
         const prodDates = typeof part.prod_dates === "string"
@@ -1491,8 +1452,6 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
           (date) => !isProductionDateComplete(part.part_code, date)
         );
 
-        // Simpan sample_dates frozen ke DB agar Status & Sample column tidak berubah
-        // setelah QC approve di QCCheckPage
         if (incompleteDates.length > 0) {
           await client.query(
             `UPDATE local_schedule_parts
@@ -1503,8 +1462,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         }
 
         for (const date of incompleteDates) {
-          // Cek apakah sudah ada qc_checks entry untuk part + date + vendor ini
-          // Gunakan part_code + production_date + vendor_name karena source_vendor_id = NULL
+
           const existingCheck = await client.query(
             `SELECT id, status FROM qc_checks
              WHERE part_code = $1
@@ -1517,7 +1475,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
           );
 
           if (existingCheck.rowCount > 0) {
-            // Sudah ada — update ke M101 Part jika belum Complete
+
             if (existingCheck.rows[0].status !== "Complete") {
               await client.query(
                 `UPDATE qc_checks
@@ -1527,10 +1485,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
               );
             }
           } else {
-            // Belum ada — insert baru
-            // CATATAN: source_vendor_id = NULL dan source_part_id = NULL karena kedua FK
-            // references oversea_schedule_vendors / oversea_schedule_parts, bukan tabel local.
-            // Tracking M101 dilakukan via data_from='M101' + vendor_name + part_code + production_date.
+
             await client.query(
               `INSERT INTO qc_checks (
                 part_code, part_name, vendor_name, production_date,
@@ -1544,8 +1499,8 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
                 date,
                 "M101",
                 "M101 Part",
-                null,   // source_vendor_id = NULL: FK hanya merujuk ke oversea_schedule_vendors, bukan local
-                null,   // source_part_id
+                null,
+                null,
                 approveByName || "System",
               ]
             );
@@ -1555,7 +1510,6 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       console.log(`[APPROVE Vendor] Inserted/updated qc_checks with status 'M101 Part' for incomplete prod_dates`);
     }
 
-    // 5. Tambahkan setiap part ke stock inventory (stock_movements + kanban_master)
     const stockResults = [];
     for (const part of partsResult.rows) {
       const qty = parseInt(part.quantity) || 0;
@@ -1563,7 +1517,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
       let quantityBefore = 0;
       if (part.kanban_master_id) {
-        // FIX: Hanya select kolom yang benar-benar ada (hapus stock_m1y2)
+
         const stockQuery = await client.query(
           `SELECT stock_m101, stock_m136, stock_off_system, stock_rtv 
            FROM kanban_master WHERE id = $1`,
@@ -1579,8 +1533,6 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
       const quantityAfter = quantityBefore + qty;
 
-      // Insert ke stock_movements (muncul sebagai arrow hijau di StockOverviewPage tab M101)
-      // Gabungkan semua prod_dates menjadi comma-separated text (DD/MM/YYYY, DD/MM/YYYY, ...)
       const rawProdDates = typeof part.prod_dates === "string"
         ? JSON.parse(part.prod_dates)
         : Array.isArray(part.prod_dates) ? part.prod_dates : [];
@@ -1612,7 +1564,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
           quantityAfter,
           "local_schedule",
           vendorId,
-          part.do_number || vendor.do_numbers,
+          part.do_number || vendor.do_number,
           part.model || modelName,
           part.prod_date || null,
           productionDatesText,
@@ -1623,9 +1575,8 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       );
       console.log(`[APPROVE Vendor] Inserted stock movement for ${part.part_code}, movement_id: ${movementResult.rows[0].id}`);
 
-      // Update kanban_master stock
       if (part.kanban_master_id) {
-        // FIX: Tidak ada kolom stock_m1y2, gunakan stock_off_system sebagai fallback
+
         let updateColumn = "stock_m101";
         if (finalStockLevel === "M136")     updateColumn = "stock_m136";
         else if (finalStockLevel === "RTV") updateColumn = "stock_rtv";
@@ -1647,7 +1598,6 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     }
     console.log(`[APPROVE Vendor] Added ${stockResults.length} parts to ${finalStockLevel} stock`);
 
-    // 6. Insert ke storage_inventory untuk M101 (mirip oversea yang insert untuk M136)
     const today = new Date();
     const yy = String(today.getFullYear()).slice(-2);
     const mm = String(today.getMonth() + 1).padStart(2, "0");
@@ -1672,11 +1622,9 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         }
       }
 
-      // Ambil qty_per_box dari master
       let qtyPerBoxMaster = part.qty_per_box || 1;
       if (qtyPerBoxMaster <= 0) qtyPerBoxMaster = 1;
 
-      // Dapatkan urutan label terakhir untuk part ini
       const seqRes = await client.query(
         `SELECT COALESCE(MAX(CAST(SUBSTRING(label_id, 13) AS INTEGER)), 0) as max_seq
          FROM storage_inventory WHERE part_id = $1`,
@@ -1724,62 +1672,65 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     }
     console.log(`[APPROVE Vendor] Storage inventory records inserted for M101`);
 
-    // 7. Tentukan status vendor: Sample (Pass tab) jika semua PASS, IQC Progress jika ada sample
-    //    allPartsPass=true  → tab Pass  (vendor_status='Sample')
-    //    allPartsPass=false → tab IQC Progress → QCCheckPage M101 Part → auto-move ke Pass
-    const newVendorStatus = allPartsPass ? "Sample" : "IQC Progress";
+    const newVendorStatus = allPartsPass ? "Pass" : "IQC Progress";
     console.log(`[APPROVE Vendor] Setting vendor status to: ${newVendorStatus}`);
 
     let vendorResult;
     if (allPartsPass) {
       vendorResult = await client.query(
         `UPDATE local_schedule_vendors 
-         SET vendor_status = 'Sample',
+         SET status = 'Pass',
              approve_by = $2,
              approve_at = CURRENT_TIMESTAMP,
              sample_by = $2,
              sample_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true 
-         RETURNING id, local_schedule_id, vendor_status, approve_by, approve_at`,
+         RETURNING id, local_schedule_id, status, approve_by, approve_at`,
         [vendorId, approveById]
       );
     } else {
       vendorResult = await client.query(
         `UPDATE local_schedule_vendors 
-         SET vendor_status = 'IQC Progress',
+         SET status = 'IQC Progress',
              approve_by = $2,
              approve_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true 
-         RETURNING id, local_schedule_id, vendor_status, approve_by, approve_at`,
+         RETURNING id, local_schedule_id, status, approve_by, approve_at`,
         [vendorId, approveById]
       );
     }
     console.log(`[APPROVE Vendor] Vendor status updated to ${newVendorStatus}`);
 
-    // 8. Cek apakah semua vendor di schedule sudah mencapai status yang sama
+    await client.query(
+      `UPDATE local_schedule_parts
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE local_schedule_vendor_id = $2 AND is_active = true`,
+      [newVendorStatus, vendorId]
+    );
+
     if (allPartsPass) {
-      // Cek apakah semua vendor Sample (Pass tab)
-      const allSampleCheck = await client.query(
+
+      const allPassCheck = await client.query(
         `SELECT COUNT(*) as total,
-                SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as matched_count
+                SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as matched_count
          FROM local_schedule_vendors WHERE local_schedule_id = $1 AND is_active = true`,
         [scheduleId]
       );
-      const { total: tc, matched_count: mc } = allSampleCheck.rows[0];
+      const { total: tc, matched_count: mc } = allPassCheck.rows[0];
       if (parseInt(tc) > 0 && parseInt(tc) === parseInt(mc)) {
         await client.query(
-          `UPDATE local_schedules SET status = 'Sample', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND is_active = true`,
+          `UPDATE local_schedules SET status = 'Pass', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND is_active = true`,
           [scheduleId]
         );
-        console.log(`[APPROVE Vendor] Schedule auto-updated to Sample (Pass tab)`);
+        console.log(`[APPROVE Vendor] Schedule auto-updated to Pass`);
       }
     } else {
-      // Cek apakah semua vendor IQC Progress
+
       const allIqcCheck = await client.query(
         `SELECT COUNT(*) as total,
-                SUM(CASE WHEN vendor_status = 'IQC Progress' THEN 1 ELSE 0 END) as matched_count
+                SUM(CASE WHEN status = 'IQC Progress' THEN 1 ELSE 0 END) as matched_count
          FROM local_schedule_vendors WHERE local_schedule_id = $1 AND is_active = true`,
         [scheduleId]
       );
@@ -1822,20 +1773,18 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
   }
 });
 
-// ====== MOVE VENDOR TO SAMPLE (from IQC Progress to Sample) ======
 router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
   const client = await pool.connect();
   try {
     const { vendorId } = req.params;
     const { moveByName } = req.body;
 
-    console.log(`[MOVE TO SAMPLE] Request:`, { vendorId, moveByName });
+    console.log(`[MOVE TO PASS] Request:`, { vendorId, moveByName });
 
     await client.query("BEGIN");
 
-    // Cek apakah vendor exists
     const vendorCheck = await client.query(
-      `SELECT id, local_schedule_id, vendor_status 
+      `SELECT id, local_schedule_id, status 
        FROM local_schedule_vendors 
        WHERE id = $1 AND is_active = true`,
       [vendorId],
@@ -1851,7 +1800,6 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
 
     const scheduleId = vendorCheck.rows[0].local_schedule_id;
 
-    // Get employee ID from name
     let sampleById = null;
     if (moveByName) {
       const empResult = await client.query(
@@ -1863,24 +1811,29 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
       }
     }
 
-    // Update vendor status to Sample with sample_by and sample_at
     const vendorResult = await client.query(
       `UPDATE local_schedule_vendors 
-       SET vendor_status = 'Sample', 
+       SET status = 'Pass', 
            sample_by = $2,
            sample_at = CURRENT_TIMESTAMP,
            updated_at = CURRENT_TIMESTAMP 
        WHERE id = $1 AND is_active = true 
-       RETURNING id, local_schedule_id, vendor_status, sample_by, sample_at`,
+       RETURNING id, local_schedule_id, status, sample_by, sample_at`,
       [vendorId, sampleById],
     );
 
-    console.log(`[MOVE TO SAMPLE] Vendor moved:`, vendorResult.rows[0]);
+    await client.query(
+      `UPDATE local_schedule_parts
+       SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
+       WHERE local_schedule_vendor_id = $1 AND is_active = true`,
+      [vendorId]
+    );
 
-    // Cek apakah semua vendor di schedule sudah Sample
+    console.log(`[MOVE TO PASS] Vendor moved:`, vendorResult.rows[0]);
+
     const allVendorsCheck = await client.query(
       `SELECT COUNT(*) as total, 
-              SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as matched_count
+              SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as matched_count
        FROM local_schedule_vendors 
        WHERE local_schedule_id = $1 AND is_active = true`,
       [scheduleId],
@@ -1888,22 +1841,21 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
 
     const { total, matched_count } = allVendorsCheck.rows[0];
 
-    // Jika semua vendor sudah Sample, update schedule status
     if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
       await client.query(
         `UPDATE local_schedules 
-         SET status = 'Sample', updated_at = CURRENT_TIMESTAMP 
+         SET status = 'Pass', updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true`,
         [scheduleId],
       );
-      console.log(`[MOVE TO SAMPLE] Schedule auto-updated to Sample`);
+      console.log(`[MOVE TO PASS] Schedule auto-updated to Pass`);
     }
 
     await client.query("COMMIT");
 
     res.json({
       success: true,
-      message: "Schedule moved to Sample",
+      message: "Schedule moved to Pass",
       data: {
         vendor: vendorResult.rows[0],
         scheduleId: scheduleId,
@@ -1911,10 +1863,10 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("[MOVE TO SAMPLE] Error:", error);
+    console.error("[MOVE TO PASS] Error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to move schedule to Sample",
+      message: "Failed to move schedule to Pass",
       error: error.message,
     });
   } finally {
@@ -1922,9 +1874,6 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
   }
 });
 
-// ====== CHECK IQC PROGRESS → AUTO MOVE TO PASS (Sample tab) ======
-// Dipanggil dari frontend saat load tab IQC Progress.
-// Cek semua vendor IQC Progress: jika semua sample_dates sudah Complete di qc_checks → pindahkan ke Pass.
 router.post("/check-iqc-to-pass", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1932,7 +1881,6 @@ router.post("/check-iqc-to-pass", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Resolve approvedByName → employee ID (untuk Pass By column)
     let passById = null;
     if (approvedByName) {
       const empResult = await client.query(
@@ -1942,14 +1890,13 @@ router.post("/check-iqc-to-pass", async (req, res) => {
       if (empResult.rowCount > 0) passById = empResult.rows[0].id;
     }
 
-    // 1. Ambil semua vendor IQC Progress beserta sample_dates masing-masing part
     const vendorsResult = await client.query(
       `SELECT lsv.id as vendor_id, lsv.local_schedule_id,
               lsp.part_code,
               COALESCE(lsp.sample_dates::jsonb, '[]'::jsonb) as sample_dates
        FROM local_schedule_vendors lsv
        JOIN local_schedule_parts lsp ON lsp.local_schedule_vendor_id = lsv.id AND lsp.is_active = true
-       WHERE lsv.vendor_status = 'IQC Progress' AND lsv.is_active = true`
+       WHERE lsv.status = 'IQC Progress' AND lsv.is_active = true`
     );
 
     if (vendorsResult.rowCount === 0) {
@@ -1957,7 +1904,6 @@ router.post("/check-iqc-to-pass", async (req, res) => {
       return res.json({ success: true, movedVendors: [] });
     }
 
-    // 2. Ambil semua qc_checks yang sudah Complete
     const qcResult = await client.query(
       `SELECT part_code, TO_CHAR(production_date, 'YYYY-MM-DD') as production_date
        FROM qc_checks WHERE status = 'Complete' AND is_active = true`
@@ -1966,41 +1912,36 @@ router.post("/check-iqc-to-pass", async (req, res) => {
       qcResult.rows.map((r) => `${r.part_code}||${r.production_date}`)
     );
 
-    // 3. Kelompokkan per vendor: kumpulkan semua sample_dates dari semua part
     const vendorMap = {};
     for (const row of vendorsResult.rows) {
       const vid = row.vendor_id;
       if (!vendorMap[vid]) {
-        vendorMap[vid] = { local_schedule_id: row.local_schedule_id, allSampleDates: [] };
+        vendorMap[vid] = { local_schedule_id: row.local_schedule_id, allPassDates: [] };
       }
       const sampleDates = typeof row.sample_dates === "string"
         ? JSON.parse(row.sample_dates)
         : Array.isArray(row.sample_dates) ? row.sample_dates : [];
       for (const d of sampleDates) {
         const dateStr = typeof d === "string" ? d.split("T")[0] : d;
-        vendorMap[vid].allSampleDates.push({ part_code: row.part_code, date: dateStr });
+        vendorMap[vid].allPassDates.push({ part_code: row.part_code, date: dateStr });
       }
     }
 
-    // 4. Cek tiap vendor: apakah semua sample_dates sudah Complete?
     const movedVendors = [];
     for (const [vendorId, info] of Object.entries(vendorMap)) {
-      const { allSampleDates, local_schedule_id } = info;
+      const { allPassDates, local_schedule_id } = info;
 
-      // Vendor tanpa sample_dates: tidak perlu dipindah (masih perlu sampling manual)
-      if (allSampleDates.length === 0) continue;
+      if (allPassDates.length === 0) continue;
 
-      const allComplete = allSampleDates.every(({ part_code, date }) =>
+      const allComplete = allPassDates.every(({ part_code, date }) =>
         completedSet.has(`${part_code}||${date}`)
       );
 
       if (!allComplete) continue;
 
-      // Semua sample_dates sudah Complete → pindahkan ke Pass (vendor_status='Sample')
-      // passById sudah di-resolve dari approvedByName yang dikirim frontend (QCCheckPage)
       await client.query(
         `UPDATE local_schedule_vendors
-         SET vendor_status = 'Sample',
+         SET status = 'Pass',
              sample_by = COALESCE(sample_by, $2),
              sample_at = COALESCE(sample_at, CURRENT_TIMESTAMP),
              updated_at = CURRENT_TIMESTAMP
@@ -2008,10 +1949,16 @@ router.post("/check-iqc-to-pass", async (req, res) => {
         [vendorId, passById]
       );
 
-      // Cek apakah semua vendor di schedule sudah Sample
+      await client.query(
+        `UPDATE local_schedule_parts
+         SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
+         WHERE local_schedule_vendor_id = $1 AND is_active = true`,
+        [vendorId]
+      );
+
       const allVendorsCheck = await client.query(
         `SELECT COUNT(*) as total,
-                SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as matched_count
+                SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as matched_count
          FROM local_schedule_vendors
          WHERE local_schedule_id = $1 AND is_active = true`,
         [local_schedule_id]
@@ -2019,7 +1966,7 @@ router.post("/check-iqc-to-pass", async (req, res) => {
       const { total, matched_count } = allVendorsCheck.rows[0];
       if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
         await client.query(
-          `UPDATE local_schedules SET status = 'Sample', updated_at = CURRENT_TIMESTAMP
+          `UPDATE local_schedules SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
            WHERE id = $1 AND is_active = true`,
           [local_schedule_id]
         );
@@ -2040,7 +1987,6 @@ router.post("/check-iqc-to-pass", async (req, res) => {
   }
 });
 
-// ====== MOVE VENDOR TO COMPLETE (from Sample to Complete) ======
 router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2051,9 +1997,8 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek apakah vendor exists
     const vendorCheck = await client.query(
-      `SELECT id, local_schedule_id, vendor_status 
+      `SELECT id, local_schedule_id, status 
        FROM local_schedule_vendors 
        WHERE id = $1 AND is_active = true`,
       [vendorId],
@@ -2069,7 +2014,6 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
 
     const scheduleId = vendorCheck.rows[0].local_schedule_id;
 
-    // Get employee ID from name
     let completeById = null;
     if (moveByName) {
       const empResult = await client.query(
@@ -2081,24 +2025,28 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
       }
     }
 
-    // Update vendor status to Complete with complete_by and complete_at
     const vendorResult = await client.query(
       `UPDATE local_schedule_vendors 
-       SET vendor_status = 'Complete', 
+       SET status = 'Complete', 
            complete_by = $2,
            complete_at = CURRENT_TIMESTAMP,
            updated_at = CURRENT_TIMESTAMP 
        WHERE id = $1 AND is_active = true 
-       RETURNING id, local_schedule_id, vendor_status, complete_by, complete_at`,
+       RETURNING id, local_schedule_id, status, complete_by, complete_at`,
       [vendorId, completeById],
     );
 
     console.log(`[MOVE TO COMPLETE] Vendor moved:`, vendorResult.rows[0]);
+    await client.query(
+      `UPDATE local_schedule_parts
+       SET status = 'Complete', updated_at = CURRENT_TIMESTAMP
+       WHERE local_schedule_vendor_id = $1 AND is_active = true`,
+      [vendorId]
+    );
 
-    // Cek apakah semua vendor di schedule sudah Complete
     const allVendorsCheck = await client.query(
       `SELECT COUNT(*) as total, 
-              SUM(CASE WHEN vendor_status = 'Complete' THEN 1 ELSE 0 END) as matched_count
+              SUM(CASE WHEN status = 'Complete' THEN 1 ELSE 0 END) as matched_count
        FROM local_schedule_vendors 
        WHERE local_schedule_id = $1 AND is_active = true`,
       [scheduleId],
@@ -2106,7 +2054,6 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
 
     const { total, matched_count } = allVendorsCheck.rows[0];
 
-    // Jika semua vendor sudah Complete, update schedule status
     if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
       await client.query(
         `UPDATE local_schedules 
@@ -2140,7 +2087,6 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
   }
 });
 
-// ====== RETURN VENDOR (move from Received back to Today) ======
 router.put("/vendors/:vendorId/return", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2150,9 +2096,8 @@ router.put("/vendors/:vendorId/return", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek apakah vendor exists
     const vendorCheck = await client.query(
-      `SELECT id, local_schedule_id, vendor_status 
+      `SELECT id, local_schedule_id, status 
        FROM local_schedule_vendors 
        WHERE id = $1 AND is_active = true`,
       [vendorId],
@@ -2168,16 +2113,22 @@ router.put("/vendors/:vendorId/return", async (req, res) => {
 
     const scheduleId = vendorCheck.rows[0].local_schedule_id;
 
-    // Update vendor status back to Today (clear move_by and move_at)
     const vendorResult = await client.query(
       `UPDATE local_schedule_vendors 
-       SET vendor_status = NULL, 
+       SET status = 'Today', 
            move_by = NULL, 
            move_at = NULL,
            updated_at = CURRENT_TIMESTAMP 
        WHERE id = $1 AND is_active = true 
-       RETURNING id, local_schedule_id, vendor_status`,
+       RETURNING id, local_schedule_id, status`,
       [vendorId],
+    );
+
+    await client.query(
+      `UPDATE local_schedule_parts
+       SET status = 'Today', updated_at = CURRENT_TIMESTAMP
+       WHERE local_schedule_vendor_id = $1 AND is_active = true`,
+      [vendorId]
     );
 
     console.log(
@@ -2185,7 +2136,6 @@ router.put("/vendors/:vendorId/return", async (req, res) => {
       vendorResult.rows[0],
     );
 
-    // Update schedule status back to Today
     await client.query(
       `UPDATE local_schedules 
        SET status = 'Today', updated_at = CURRENT_TIMESTAMP 
@@ -2216,7 +2166,6 @@ router.put("/vendors/:vendorId/return", async (req, res) => {
   }
 });
 
-// ====== RETURN VENDOR FROM SAMPLE TO IQC PROGRESS ======
 router.put("/vendors/:vendorId/return-to-iqc", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2226,9 +2175,8 @@ router.put("/vendors/:vendorId/return-to-iqc", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek apakah vendor exists dan statusnya Sample
     const vendorCheck = await client.query(
-      `SELECT id, local_schedule_id, vendor_status 
+      `SELECT id, local_schedule_id, status 
        FROM local_schedule_vendors 
        WHERE id = $1 AND is_active = true`,
       [vendorId],
@@ -2244,16 +2192,22 @@ router.put("/vendors/:vendorId/return-to-iqc", async (req, res) => {
 
     const scheduleId = vendorCheck.rows[0].local_schedule_id;
 
-    // Update vendor status back to IQC Progress (clear sample_by and sample_at)
     const vendorResult = await client.query(
       `UPDATE local_schedule_vendors 
-       SET vendor_status = 'IQC Progress', 
+       SET status = 'IQC Progress', 
            sample_by = NULL, 
            sample_at = NULL,
            updated_at = CURRENT_TIMESTAMP 
        WHERE id = $1 AND is_active = true 
-       RETURNING id, local_schedule_id, vendor_status`,
+       RETURNING id, local_schedule_id, status`,
       [vendorId],
+    );
+
+    await client.query(
+      `UPDATE local_schedule_parts
+       SET status = 'IQC Progress', updated_at = CURRENT_TIMESTAMP
+       WHERE local_schedule_vendor_id = $1 AND is_active = true`,
+      [vendorId]
     );
 
     console.log(
@@ -2261,7 +2215,6 @@ router.put("/vendors/:vendorId/return-to-iqc", async (req, res) => {
       vendorResult.rows[0],
     );
 
-    // Update schedule status back to IQC Progress
     await client.query(
       `UPDATE local_schedules 
        SET status = 'IQC Progress', updated_at = CURRENT_TIMESTAMP 
@@ -2292,7 +2245,6 @@ router.put("/vendors/:vendorId/return-to-iqc", async (req, res) => {
   }
 });
 
-// ====== UPDATE SCHEDULE (untuk edit schedule di tab Schedule) ======
 router.put("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2307,7 +2259,6 @@ router.put("/:id", async (req, res) => {
       uploadByName,
     });
 
-    // Validasi input
     if (!scheduleDate || !stockLevel || !modelName) {
       return res.status(400).json({
         success: false,
@@ -2317,7 +2268,6 @@ router.put("/:id", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek apakah schedule exists
     const scheduleCheck = await client.query(
       `SELECT id, schedule_code, status FROM local_schedules 
        WHERE id = $1 AND is_active = true`,
@@ -2332,10 +2282,8 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    // Resolve employee ID dari nama
     const uploadBy = await resolveEmployeeId(client, uploadByName);
 
-    // Update schedule
     const result = await client.query(
       `UPDATE local_schedules 
        SET schedule_date = $1::date, 
@@ -2371,7 +2319,6 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// ====== UPDATE schedule status ======
 router.put("/:id/status", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2389,11 +2336,11 @@ router.put("/:id/status", async (req, res) => {
 
     const validStatuses = [
       "New",
-      "Scheduled",
+      "Schedule",
       "Today",
       "Received",
       "IQC Progress",
-      "Sample",
+      "Pass",
       "Complete",
       "History",
     ];
@@ -2439,32 +2386,30 @@ router.put("/:id/status", async (req, res) => {
   }
 });
 
-// ====== ADD VENDOR to existing schedule ======
 router.post("/:scheduleId/vendors", async (req, res) => {
   const client = await pool.connect();
   try {
     const { scheduleId } = req.params;
-    const { trip_id, vendor_id, do_numbers } = req.body;
+    const { trip_id, vendor_id, do_number } = req.body;
 
     console.log(`[ADD Vendor] Request:`, {
       scheduleId,
       trip_id,
       vendor_id,
-      do_numbers,
+      do_number,
     });
 
-    if (!trip_id || !vendor_id || !do_numbers) {
+    if (!trip_id || !vendor_id || !do_number) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: trip_id, schedule_id, do_numbers",
+        message: "Missing required fields: trip_id, schedule_id, do_number",
       });
     }
 
     await client.query("BEGIN");
 
-    // Cek schedule exists
     const scheduleCheck = await client.query(
-      `SELECT id, schedule_date, stock_level, model_name FROM local_schedules WHERE id = $1 AND is_active = true`,
+      `SELECT id, schedule_date, stock_level, model_name, status FROM local_schedules WHERE id = $1 AND is_active = true`,
       [scheduleId],
     );
 
@@ -2476,7 +2421,8 @@ router.post("/:scheduleId/vendors", async (req, res) => {
       });
     }
 
-    // Get trip arrival time
+    const scheduleStatus = scheduleCheck.rows[0].status || 'New';
+
     const tripCheck = await client.query(
       `SELECT id, arv_to FROM trips WHERE id = $1`,
       [trip_id],
@@ -2491,20 +2437,18 @@ router.post("/:scheduleId/vendors", async (req, res) => {
     }
 
     const arrivalTime = tripCheck.rows[0].arv_to;
-    const doJoined = Array.isArray(do_numbers)
-      ? do_numbers.join(" | ")
-      : do_numbers;
+    const doJoined = Array.isArray(do_number)
+      ? do_number.join(" | ")
+      : do_number;
 
-    // Insert vendor
     const result = await client.query(
       `INSERT INTO local_schedule_vendors
-       (local_schedule_id, trip_id, vendor_id, do_numbers, arrival_time, total_pallet, total_item)
-       VALUES ($1, $2, $3, $4, $5, 0, 0)
-       RETURNING id, local_schedule_id, trip_id, vendor_id, do_numbers, arrival_time`,
-      [scheduleId, trip_id, vendor_id, doJoined, arrivalTime],
+       (local_schedule_id, trip_id, vendor_id, do_number, arrival_time, total_pallet, total_item, status)
+       VALUES ($1, $2, $3, $4, $5, 0, 0, $6)
+       RETURNING id, local_schedule_id, trip_id, vendor_id, do_number, arrival_time, status`,
+      [scheduleId, trip_id, vendor_id, doJoined, arrivalTime, scheduleStatus],
     );
 
-    // Update total_vendor di schedule
     await client.query(
       `UPDATE local_schedules
        SET total_vendor = (
@@ -2537,7 +2481,6 @@ router.post("/:scheduleId/vendors", async (req, res) => {
   }
 });
 
-// ====== ADD PART to existing vendor ======
 router.post("/vendors/:vendorId/parts", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2563,7 +2506,6 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Cek vendor exists
     const vendorCheck = await client.query(
       `SELECT id, local_schedule_id FROM local_schedule_vendors WHERE id = $1 AND is_active = true`,
       [vendorId],
@@ -2579,7 +2521,6 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
 
     const scheduleId = vendorCheck.rows[0].local_schedule_id;
 
-    // Get part_id from kanban_master if exists
     let partId = null;
     const partRes = await client.query(
       `SELECT id FROM kanban_master WHERE part_code = $1 AND is_active = true LIMIT 1`,
@@ -2589,11 +2530,16 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
       partId = partRes.rows[0].id;
     }
 
-    // Insert part
+    const vendorStatusRes = await client.query(
+      `SELECT lsv.status FROM local_schedule_vendors lsv WHERE lsv.id = $1`,
+      [vendorId]
+    );
+    const vendorStatus = vendorStatusRes.rows[0]?.status || 'New';
+
     const result = await client.query(
       `INSERT INTO local_schedule_parts
-       (local_schedule_vendor_id, part_id, part_code, part_name, quantity, quantity_box, unit, do_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (local_schedule_vendor_id, part_id, part_code, part_name, quantity, quantity_box, unit, do_number, remark, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id, part_code, part_name, quantity as qty, quantity_box as qty_box, unit`,
       [
         vendorId,
@@ -2604,10 +2550,11 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
         Number(quantity_box) || 0,
         unit || "PCS",
         do_number || "",
+        "",
+        vendorStatus,
       ],
     );
 
-    // Update total_item di vendor
     await client.query(
       `UPDATE local_schedule_vendors
        SET total_item = (
@@ -2618,7 +2565,6 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
       [vendorId],
     );
 
-    // Update total_item di schedule
     await client.query(
       `UPDATE local_schedules
        SET total_item = (
@@ -2654,8 +2600,6 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
   }
 });
 
-
-// ====== BULK ADD VENDORS to schedule (used by AddLocalSchedulePage) ======
 router.post("/:scheduleId/vendors/bulk", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2669,7 +2613,7 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
     await client.query("BEGIN");
 
     const scheduleCheck = await client.query(
-      `SELECT id, schedule_date, stock_level, model_name FROM local_schedules WHERE id = $1 AND is_active = true`,
+      `SELECT id, schedule_date, stock_level, model_name, status FROM local_schedules WHERE id = $1 AND is_active = true`,
       [scheduleId]
     );
 
@@ -2678,10 +2622,12 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
       return res.status(404).json({ success: false, message: "Schedule not found" });
     }
 
+    const scheduleStatus = scheduleCheck.rows[0].status || 'New';
+
     const insertedVendors = [];
 
     for (const item of items) {
-      const { trip_id, vendor_id, do_numbers } = item;
+      const { trip_id, vendor_id, do_number } = item;
       if (!trip_id || !vendor_id) continue;
 
       const tripCheck = await client.query(
@@ -2689,14 +2635,14 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
         [trip_id]
       );
       const arrivalTime = tripCheck.rows[0]?.arv_to || null;
-      const doJoined = Array.isArray(do_numbers) ? do_numbers.join(" | ") : (do_numbers || "");
+      const doJoined = Array.isArray(do_number) ? do_number.join(" | ") : (do_number || "");
 
       const result = await client.query(
         `INSERT INTO local_schedule_vendors
-         (local_schedule_id, trip_id, vendor_id, do_numbers, arrival_time, total_pallet, total_item)
-         VALUES ($1, $2, $3, $4, $5, 0, 0)
-         RETURNING id, local_schedule_id, trip_id, vendor_id, do_numbers, arrival_time`,
-        [scheduleId, trip_id, vendor_id, doJoined, arrivalTime]
+         (local_schedule_id, trip_id, vendor_id, do_number, arrival_time, total_pallet, total_item, status)
+         VALUES ($1, $2, $3, $4, $5, 0, 0, $6)
+         RETURNING id, local_schedule_id, trip_id, vendor_id, do_number, arrival_time, status`,
+        [scheduleId, trip_id, vendor_id, doJoined, arrivalTime, scheduleStatus]
       );
 
       insertedVendors.push(result.rows[0]);
@@ -2728,7 +2674,6 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
   }
 });
 
-// ====== BULK ADD PARTS to vendor (used by AddLocalSchedulePage) ======
 router.post("/:vendorId/parts/bulk", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2752,6 +2697,11 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
     }
 
     const scheduleId = vendorCheck.rows[0].local_schedule_id;
+    const scheduleRes = await client.query(
+      `SELECT status FROM local_schedules WHERE id = $1`,
+      [scheduleId]
+    );
+    const scheduleStatus = scheduleRes.rows[0]?.status || 'New';
     const insertedParts = [];
 
     for (const item of items) {
@@ -2766,10 +2716,10 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
 
       const result = await client.query(
         `INSERT INTO local_schedule_parts
-         (local_schedule_vendor_id, part_id, part_code, part_name, quantity, quantity_box, unit, do_number)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (local_schedule_vendor_id, part_id, part_code, part_name, quantity, quantity_box, unit, do_number, remark, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id, part_code, part_name, quantity as qty, quantity_box as qty_box, unit`,
-        [vendorId, partId, part_code, part_name || "", Number(qty) || 0, Number(qty_box) || 0, unit || "PCS", do_number || ""]
+        [vendorId, partId, part_code, part_name || "", Number(qty) || 0, Number(qty_box) || 0, unit || "PCS", do_number || "", "", scheduleStatus]
       );
 
       insertedParts.push(result.rows[0]);
@@ -2814,7 +2764,6 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
   }
 });
 
-// ====== DELETE SCHEDULE (CASCADE) ======
 router.delete("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2824,7 +2773,6 @@ router.delete("/:id", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Cek apakah schedule exists
     const scheduleCheck = await client.query(
       `SELECT id, schedule_code, status FROM local_schedules 
        WHERE id = $1 AND is_active = true`,
@@ -2843,7 +2791,6 @@ router.delete("/:id", async (req, res) => {
     const schedule = scheduleCheck.rows[0];
     console.log(`[DELETE Schedule] Found schedule:`, schedule);
 
-    // 2. Dapatkan semua vendor IDs dari schedule ini
     const vendorIdsResult = await client.query(
       `SELECT id FROM local_schedule_vendors 
        WHERE local_schedule_id = $1 AND is_active = true`,
@@ -2858,7 +2805,6 @@ router.delete("/:id", async (req, res) => {
     let deletedParts = 0;
     let deletedVendors = 0;
 
-    // 3. Delete semua parts dari vendors ini
     if (vendorIds.length > 0) {
       const partsDeleteResult = await client.query(
         `DELETE FROM local_schedule_parts 
@@ -2870,7 +2816,6 @@ router.delete("/:id", async (req, res) => {
       console.log(`[DELETE Schedule] Deleted ${deletedParts} parts`);
     }
 
-    // 4. Delete semua vendors
     const vendorsDeleteResult = await client.query(
       `DELETE FROM local_schedule_vendors 
        WHERE local_schedule_id = $1
@@ -2880,7 +2825,6 @@ router.delete("/:id", async (req, res) => {
     deletedVendors = vendorsDeleteResult.rowCount;
     console.log(`[DELETE Schedule] Deleted ${deletedVendors} vendors`);
 
-    // 5. Delete schedule header
     const scheduleDeleteResult = await client.query(
       `DELETE FROM local_schedules 
        WHERE id = $1 
@@ -2919,7 +2863,6 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// ====== DELETE VENDOR (CASCADE) ======
 router.delete("/vendors/:vendorId", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2929,7 +2872,6 @@ router.delete("/vendors/:vendorId", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Cek apakah vendor exists dan ambil schedule_id
     const vendorCheck = await client.query(
       `SELECT id, local_schedule_id FROM local_schedule_vendors 
        WHERE id = $1 AND is_active = true`,
@@ -2949,7 +2891,6 @@ router.delete("/vendors/:vendorId", async (req, res) => {
     const scheduleId = vendor.local_schedule_id;
     console.log(`[DELETE Vendor] Found vendor:`, vendor);
 
-    // 2. Delete semua parts dari vendor ini
     const partsDeleteResult = await client.query(
       `DELETE FROM local_schedule_parts 
        WHERE local_schedule_vendor_id = $1
@@ -2959,7 +2900,6 @@ router.delete("/vendors/:vendorId", async (req, res) => {
     const deletedParts = partsDeleteResult.rowCount;
     console.log(`[DELETE Vendor] Deleted ${deletedParts} parts`);
 
-    // 3. Delete vendor
     const vendorDeleteResult = await client.query(
       `DELETE FROM local_schedule_vendors 
        WHERE id = $1 
@@ -2968,7 +2908,6 @@ router.delete("/vendors/:vendorId", async (req, res) => {
     );
     console.log(`[DELETE Vendor] Deleted vendor:`, vendorDeleteResult.rows[0]);
 
-    // 4. Update total_vendor di schedule header
     const updateResult = await client.query(
       `UPDATE local_schedules
        SET total_vendor = (
@@ -3019,7 +2958,6 @@ router.delete("/vendors/:vendorId", async (req, res) => {
   }
 });
 
-// ====== DELETE PART ======
 router.delete("/parts/:partId", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -3029,7 +2967,6 @@ router.delete("/parts/:partId", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Cek apakah part exists dan ambil vendor_id
     const partCheck = await client.query(
       `SELECT id, local_schedule_vendor_id FROM local_schedule_parts 
        WHERE id = $1 AND is_active = true`,
@@ -3049,7 +2986,6 @@ router.delete("/parts/:partId", async (req, res) => {
     const vendorId = part.local_schedule_vendor_id;
     console.log(`[DELETE Part] Found part:`, part);
 
-    // 2. Delete part
     const partDeleteResult = await client.query(
       `DELETE FROM local_schedule_parts 
        WHERE id = $1 
@@ -3058,7 +2994,6 @@ router.delete("/parts/:partId", async (req, res) => {
     );
     console.log(`[DELETE Part] Deleted part:`, partDeleteResult.rows[0]);
 
-    // 3. Update total_item di vendor
     const updateVendorResult = await client.query(
       `UPDATE local_schedule_vendors
        SET total_item = (
@@ -3077,7 +3012,6 @@ router.delete("/parts/:partId", async (req, res) => {
       updateVendorResult.rows[0],
     );
 
-    // 4. Update total_item di schedule header
     const updateScheduleResult = await client.query(
       `UPDATE local_schedules
        SET total_item = (
@@ -3122,7 +3056,6 @@ router.delete("/parts/:partId", async (req, res) => {
   }
 });
 
-// ====== DELETE VENDOR dari route lama (untuk kompatibilitas) ======
 router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -3134,7 +3067,6 @@ router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Cek vendor exists
     const vendorCheck = await client.query(
       `SELECT id FROM local_schedule_vendors 
        WHERE id = $1 AND local_schedule_id = $2 AND is_active = true`,
@@ -3149,7 +3081,6 @@ router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
       });
     }
 
-    // 2. Delete parts
     const partsDeleteResult = await client.query(
       `DELETE FROM local_schedule_parts 
        WHERE local_schedule_vendor_id = $1
@@ -3159,7 +3090,6 @@ router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
     const deletedParts = partsDeleteResult.rowCount;
     console.log(`[DELETE Vendor Alt] Deleted ${deletedParts} parts`);
 
-    // 3. Delete vendor
     await client.query(
       `DELETE FROM local_schedule_vendors 
        WHERE id = $1`,
@@ -3167,7 +3097,6 @@ router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
     );
     console.log(`[DELETE Vendor Alt] Deleted vendor ${vendorId}`);
 
-    // 4. Update totals
     await client.query(
       `UPDATE local_schedules
        SET total_vendor = (
@@ -3208,7 +3137,6 @@ router.delete("/:scheduleId/vendors/:vendorId", async (req, res) => {
   }
 });
 
-// ====== DELETE PART dari vendor (route lama untuk kompatibilitas) ======
 router.delete("/vendors/:vendorId/parts/:partId", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -3220,7 +3148,6 @@ router.delete("/vendors/:vendorId/parts/:partId", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Cek part exists
     const partCheck = await client.query(
       `SELECT id FROM local_schedule_parts 
        WHERE id = $1 AND local_schedule_vendor_id = $2 AND is_active = true`,
@@ -3235,7 +3162,6 @@ router.delete("/vendors/:vendorId/parts/:partId", async (req, res) => {
       });
     }
 
-    // 2. Delete part
     await client.query(
       `DELETE FROM local_schedule_parts 
        WHERE id = $1`,
@@ -3243,7 +3169,6 @@ router.delete("/vendors/:vendorId/parts/:partId", async (req, res) => {
     );
     console.log(`[DELETE Part Alt] Deleted part ${partId}`);
 
-    // 3. Update vendor total
     const vendorUpdate = await client.query(
       `UPDATE local_schedule_vendors
        SET total_item = (
@@ -3258,7 +3183,6 @@ router.delete("/vendors/:vendorId/parts/:partId", async (req, res) => {
 
     const scheduleId = vendorUpdate.rows[0].local_schedule_id;
 
-    // 4. Update schedule total
     await client.query(
       `UPDATE local_schedules
        SET total_item = (

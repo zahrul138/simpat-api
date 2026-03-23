@@ -353,16 +353,23 @@ const checkAndMoveLocalVendorToPassIfAllApproved = async (client, vendorId, appr
 
 
     if (totalChecks > 0 && approvedChecks === totalChecks) {
-      console.log(`[checkAndMoveLocalVendor] All done! Moving vendor ${vendorId} to Sample (Pass tab)`);
+      console.log(`[checkAndMoveLocalVendor] All done! Moving vendor ${vendorId} to Pass tab`);
 
       await client.query(
         `UPDATE local_schedule_vendors
-         SET vendor_status = 'Sample',
+         SET status = 'Pass',
              sample_by = $2,
              sample_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND is_active = true`,
         [vendorId, approvedById]
+      );
+
+      await client.query(
+        `UPDATE local_schedule_parts
+         SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
+         WHERE local_schedule_vendor_id = $1 AND is_active = true`,
+        [vendorId]
       );
 
 
@@ -376,20 +383,20 @@ const checkAndMoveLocalVendorToPassIfAllApproved = async (client, vendorId, appr
 
         const allVendorsCheck = await client.query(
           `SELECT COUNT(*) as total,
-                  SUM(CASE WHEN vendor_status = 'Sample' THEN 1 ELSE 0 END) as sample_count
+                  SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as pass_count
            FROM local_schedule_vendors
            WHERE local_schedule_id = $1 AND is_active = true`,
           [scheduleId]
         );
-        const { total, sample_count } = allVendorsCheck.rows[0];
-        if (parseInt(total) > 0 && parseInt(total) === parseInt(sample_count)) {
+        const { total, pass_count } = allVendorsCheck.rows[0];
+        if (parseInt(total) > 0 && parseInt(total) === parseInt(pass_count)) {
           await client.query(
             `UPDATE local_schedules
-             SET status = 'Sample', updated_at = CURRENT_TIMESTAMP
+             SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
              WHERE id = $1 AND is_active = true`,
             [scheduleId]
           );
-          console.log(`[checkAndMoveLocalVendor] Schedule ${scheduleId} moved to Sample`);
+          console.log(`[checkAndMoveLocalVendor] Schedule ${scheduleId} moved to Pass`);
         }
       }
 
