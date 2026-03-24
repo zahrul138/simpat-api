@@ -19,7 +19,6 @@ router.get("/models", async (_req, res) => {
        ORDER BY name`
     );
 
-    // Jika tidak ada data, return default
     if (q.rows.length === 0) {
       return res.json({
         success: true,
@@ -35,7 +34,7 @@ router.get("/models", async (_req, res) => {
     console.error("[GET /api/masters/models] error:", e.message);
     res.json({
       success: true,
-      data: ["Veronicas", "Heracles"], // Fallback
+      data: ["Veronicas", "Heracles"], 
     });
   }
 });

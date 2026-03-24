@@ -42,7 +42,7 @@ router.get("/", async (req, res) => {
         rejected_by_name as rejected_by,
         rejected_at,
         created_by,
-        created_at,
+        COALESCE(created_at, updated_at) as created_at,
         updated_at,
         source_vendor_id,
         source_part_id
@@ -271,13 +271,13 @@ const checkAndMoveOverseaVendorToPassIfAllApproved = async (client, vendorId, ap
         [vendorId, approvedById]
       );
 
-
       await client.query(
         `UPDATE oversea_schedule_parts
-         SET status = 'Pass', sample_dates = '[]'::jsonb, updated_at = CURRENT_TIMESTAMP
+         SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
          WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
         [vendorId]
       );
+
 
       const vendorInfo = await client.query(
         `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,

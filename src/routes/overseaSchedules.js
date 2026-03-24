@@ -569,14 +569,6 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
       );
 
 
-      await client.query(
-        `UPDATE oversea_schedule_parts
-         SET sample_dates = '[]'::jsonb, updated_at = CURRENT_TIMESTAMP
-         WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-        [vendorId]
-      );
-
-
       const vendorInfo = await client.query(
         `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
         [vendorId]
@@ -1859,7 +1851,11 @@ router.put("/parts/:partId", async (req, res) => {
 
 
     const currentPart = await client.query(
-      `SELECT id, oversea_schedule_vendor_id FROM oversea_schedule_parts WHERE id = $1 AND is_active = true`,
+      `SELECT osp.id, osp.oversea_schedule_vendor_id, osp.prod_dates, osp.sample_dates,
+              osp.part_code, osp.part_name, osv.status as vendor_status
+       FROM oversea_schedule_parts osp
+       JOIN oversea_schedule_vendors osv ON osv.id = osp.oversea_schedule_vendor_id
+       WHERE osp.id = $1 AND osp.is_active = true`,
       [partId]
     );
 
@@ -1963,6 +1959,145 @@ router.put("/parts/:partId", async (req, res) => {
     );
 
     console.log("[UPDATE Part] Part updated:", result.rows[0]);
+
+
+    if (prod_dates !== undefined) {
+      const updatedPart = result.rows[0];
+      const newProdDates = Array.isArray(updatedPart.prod_dates)
+        ? updatedPart.prod_dates
+        : (typeof updatedPart.prod_dates === 'string' ? JSON.parse(updatedPart.prod_dates || '[]') : []);
+
+      // Use pre-update values from currentPart + fetch vendor_name
+      const rawSample = currentPart.rows[0].sample_dates;
+      const partCode = currentPart.rows[0].part_code;
+      const partName = currentPart.rows[0].part_name;
+      const vendorNameRes = await client.query(
+        `SELECT vd.vendor_name FROM oversea_schedule_vendors osv
+         JOIN vendor_detail vd ON vd.id = osv.vendor_id
+         WHERE osv.id = $1`,
+        [vendorId]
+      );
+      const vendorName = vendorNameRes.rows[0]?.vendor_name || '';
+      const oldSampleDates = Array.isArray(rawSample)
+        ? rawSample
+        : (typeof rawSample === 'string' ? JSON.parse(rawSample || '[]') : []);
+
+      // Dates removed from prod_dates that were in sample_dates
+      const removedSampleDates = oldSampleDates.filter(d => !newProdDates.includes(d));
+      // Dates added to prod_dates - use pre-update values from currentPart
+      const prevRaw = currentPart.rows[0].prod_dates;
+      const prevProdDates = Array.isArray(prevRaw)
+        ? prevRaw
+        : (typeof prevRaw === 'string' ? JSON.parse(prevRaw || '[]') : []);
+      const addedDates = newProdDates.filter(d => !prevProdDates.includes(d));
+
+      // --- Handle REMOVED sample dates ---
+      if (removedSampleDates.length > 0) {
+        for (const removedDate of removedSampleDates) {
+          await client.query(
+            `UPDATE qc_checks
+             SET is_active = false, updated_at = CURRENT_TIMESTAMP
+             WHERE source_part_id = $1
+               AND data_from = 'M136'
+               AND status != 'Complete'
+               AND TO_CHAR(production_date, 'YYYY-MM-DD') = $2
+               AND is_active = true`,
+            [partId, String(removedDate).split('T')[0]]
+          );
+        }
+      }
+
+      // --- Handle ADDED dates: check if they need a QC check ---
+      const addedSampleDates = [];
+      for (const addedDate of addedDates) {
+        const dateStr = String(addedDate).split('T')[0];
+        // Check if already Complete in qc_checks
+        const completeCheck = await client.query(
+          `SELECT id FROM qc_checks
+           WHERE part_code = $1
+             AND TO_CHAR(production_date, 'YYYY-MM-DD') = $2
+             AND status = 'Complete'
+             AND is_active = true
+           LIMIT 1`,
+          [partCode, dateStr]
+        );
+        if (completeCheck.rowCount === 0) {
+          // Not complete — it's a sample date, reactivate or create QC check
+          addedSampleDates.push(addedDate);
+          const existingInactive = await client.query(
+            `SELECT id FROM qc_checks
+             WHERE source_part_id = $1
+               AND TO_CHAR(production_date, 'YYYY-MM-DD') = $2
+               AND data_from = 'M136'
+             LIMIT 1`,
+            [partId, dateStr]
+          );
+          if (existingInactive.rowCount > 0) {
+            const vApproveRes = await client.query(
+              `SELECT em.emp_name, osv.approve_at FROM oversea_schedule_vendors osv
+               LEFT JOIN employees em ON em.id = osv.approve_by
+               WHERE osv.id = $1`,
+              [vendorId]
+            );
+            const vApproveByName = vApproveRes.rows[0]?.emp_name || null;
+            const vApproveAt = vApproveRes.rows[0]?.approve_at || null;
+            await client.query(
+              `UPDATE qc_checks
+               SET is_active = true, status = 'M136 Part',
+                   created_by = COALESCE(created_by, $2),
+                   created_at = COALESCE(created_at, $3),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = $1`,
+              [existingInactive.rows[0].id, vApproveByName, vApproveAt]
+            );
+          } else {
+            const vApproveResIns = await client.query(
+              `SELECT em.emp_name, osv.approve_at FROM oversea_schedule_vendors osv
+               LEFT JOIN employees em ON em.id = osv.approve_by
+               WHERE osv.id = $1`,
+              [vendorId]
+            );
+            const vApproveByNameIns = vApproveResIns.rows[0]?.emp_name || null;
+            const vApproveAtIns = vApproveResIns.rows[0]?.approve_at || null;
+            await client.query(
+              `INSERT INTO qc_checks
+               (part_code, part_name, vendor_name, production_date, data_from, status,
+                source_vendor_id, source_part_id, created_by, created_at, updated_at, is_active)
+               VALUES ($1, $2, $3, $4::date, 'M136', 'M136 Part', $5, $6, $7, $8,
+                       CURRENT_TIMESTAMP, true)`,
+              [partCode, partName, vendorName, dateStr, vendorId, partId, vApproveByNameIns, vApproveAtIns]
+            );
+          }
+        }
+      }
+
+      // --- Recompute sample_dates ---
+      const updatedSampleDates = [
+        ...oldSampleDates.filter(d => !removedSampleDates.includes(d)),
+        ...addedSampleDates
+      ];
+      await client.query(
+        `UPDATE oversea_schedule_parts
+         SET sample_dates = $1::jsonb, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [JSON.stringify(updatedSampleDates), partId]
+      );
+
+      // --- Update part status based on vendor status ---
+      const osVendorStatus = currentPart.rows[0].vendor_status || 'IQC Progress';
+      const osStatusWhenSample = ['Schedule', 'New', 'Today', 'Received', 'Pass', 'Complete', 'IQC Progress'].includes(osVendorStatus) ? osVendorStatus : 'IQC Progress';
+      if (updatedSampleDates.length === 0 && newProdDates.length > 0) {
+        await client.query(
+          `UPDATE oversea_schedule_parts SET status = 'PASS', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+          [partId]
+        );
+      } else if (updatedSampleDates.length > 0) {
+        await client.query(
+          `UPDATE oversea_schedule_parts SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          [osStatusWhenSample, partId]
+        );
+      }
+    }
 
 
     await updateVendorTotals(client, vendorId);
@@ -2379,9 +2514,10 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
                      data_from = 'M136',
                      source_vendor_id = $3,
                      source_part_id = $4,
+                     created_by = $5,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $1`,
-                [existingCheck.rows[0].id, 'M136 Part', vendorId, part.id]
+                [existingCheck.rows[0].id, 'M136 Part', vendorId, part.id, approveByName || 'System']
               );
             }
           } else {
