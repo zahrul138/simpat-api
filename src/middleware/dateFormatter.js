@@ -103,7 +103,6 @@ const formatScheduleDates = (req, res, next) => {
       }
     } catch (err) {
       console.error('[DateFormatter] Unexpected error:', err.message);
-      // Jangan ganggu response jika ada error
     }
     
     return originalJson.call(this, data);

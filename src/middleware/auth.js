@@ -18,7 +18,6 @@ module.exports = function auth(required = true) {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
-    // ── Cek is_active di database ──
     try {
       const { rows } = await pool.query(
         'SELECT is_active FROM employees WHERE id = $1 LIMIT 1',

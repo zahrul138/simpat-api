@@ -1,9 +1,7 @@
-// routes/stockInventory.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-// Helper function to get employee ID from name
 const resolveEmployeeId = async (client, empName) => {
   if (!empName) return null;
   const q = await client.query(
@@ -13,7 +11,6 @@ const resolveEmployeeId = async (client, empName) => {
   return q.rows[0]?.id ?? null;
 };
 
-// Helper function to format date
 const formatDateTime = (date) => {
   if (!date) return null;
   const d = new Date(date);
@@ -25,8 +22,6 @@ const formatDateTime = (date) => {
   return `${day}/${month}/${year} ${hours}.${minutes}`;
 };
 
-// ====== GET STOCK OVERVIEW BY PART CODE ======
-// GET /api/stock-inventory/overview?part_code=XXXX
 router.get("/overview", async (req, res) => {
   try {
     const { part_code } = req.query;
@@ -85,8 +80,6 @@ router.get("/overview", async (req, res) => {
   }
 });
 
-// ====== GET MOVEMENT HISTORY BY PART CODE ======
-// GET /api/stock-inventory/movements?part_code=XXXX&stock_level=M101&limit=50
 router.get("/movements", async (req, res) => {
   try {
     const { part_code, stock_level, limit = 20, offset = 0 } = req.query;
@@ -129,7 +122,6 @@ router.get("/movements", async (req, res) => {
     const params = [part_code.trim()];
     let paramIndex = 2;
 
-    // Filter by stock_level if provided (case-insensitive)
     if (stock_level) {
       query += ` AND UPPER(sm.stock_level) = UPPER($${paramIndex})`;
       params.push(stock_level.trim());
@@ -145,8 +137,6 @@ router.get("/movements", async (req, res) => {
 
     const { rows } = await pool.query(query, params);
 
-    // Format moved_by for display
-    // Prioritas: moved_by_name (stored) → emp_name (JOIN) → hanya tanggal
     const formattedRows = rows.map((row, index) => {
       const displayName = row.moved_by_name || row.emp_name || null;
       return {
@@ -158,7 +148,6 @@ router.get("/movements", async (req, res) => {
       };
     });
 
-    // Get total count
     let countQuery = `
       SELECT COUNT(*) as total
       FROM stock_movements
@@ -196,8 +185,6 @@ router.get("/movements", async (req, res) => {
   }
 });
 
-// ====== ADD STOCK (Used when approving from Received tab) ======
-// POST /api/stock-inventory/add-stock
 router.post("/add-stock", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -218,7 +205,6 @@ router.post("/add-stock", async (req, res) => {
 
     console.log("[ADD Stock] Request:", req.body);
 
-    // Validasi
     if (!part_code || !quantity || !stock_level) {
       return res.status(400).json({
         success: false,
@@ -226,7 +212,6 @@ router.post("/add-stock", async (req, res) => {
       });
     }
 
-    // Validasi stock_level
     const validStockLevels = ["M101", "M136", "Off System", "RTV", "SCRAP"];
     if (!validStockLevels.includes(stock_level.toUpperCase())) {
       return res.status(400).json({
@@ -237,7 +222,6 @@ router.post("/add-stock", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Get part info from kanban_master
     const partResult = await client.query(
       `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv, COALESCE(stock_scrap, 0) AS stock_scrap
        FROM kanban_master 
@@ -257,7 +241,6 @@ router.post("/add-stock", async (req, res) => {
       finalPartName = part.part_name || part_name;
       finalModel = part.model || model;
 
-      // Get current stock based on stock_level
       const stockLevelUpper = stock_level.toUpperCase();
       if (stockLevelUpper === "M101") quantityBefore = part.stock_m101 || 0;
       else if (stockLevelUpper === "M136") quantityBefore = part.stock_m136 || 0;
@@ -268,10 +251,8 @@ router.post("/add-stock", async (req, res) => {
 
     const quantityAfter = quantityBefore + parseInt(quantity);
 
-    // Get employee ID
     const movedById = await resolveEmployeeId(client, moved_by_name);
 
-    // Insert movement record
     const movementResult = await client.query(
       `INSERT INTO stock_movements (
         part_id, part_code, part_name, movement_type, stock_level,
@@ -303,7 +284,6 @@ router.post("/add-stock", async (req, res) => {
 
     console.log("[ADD Stock] Movement created:", movementResult.rows[0].id);
 
-    // Update kanban_master stock if part exists
     if (partId) {
       const stockLevelUpper = stock_level.toUpperCase();
       let updateColumn = "stock_m101";
@@ -347,13 +327,10 @@ router.post("/add-stock", async (req, res) => {
   }
 });
 
-// ====== BULK ADD STOCK (Used when approving multiple parts) ======
-// POST /api/stock-inventory/add-stock-bulk
 router.post("/add-stock-bulk", async (req, res) => {
   const client = await pool.connect();
   try {
     const { items, source_type, source_id, moved_by_name } = req.body;
-    // items = [{ part_code, part_name, quantity, stock_level, model, production_date, remark, source_reference }]
 
     console.log("[BULK ADD Stock] Request:", { itemCount: items?.length, source_type, source_id, moved_by_name });
 
@@ -366,7 +343,6 @@ router.post("/add-stock-bulk", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Get employee ID
     const movedById = await resolveEmployeeId(client, moved_by_name);
 
     const results = [];
@@ -394,7 +370,6 @@ router.post("/add-stock-bulk", async (req, res) => {
           continue;
         }
 
-        // Get part info
         const partResult = await client.query(
           `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv
            FROM kanban_master 
@@ -423,7 +398,6 @@ router.post("/add-stock-bulk", async (req, res) => {
 
         const quantityAfter = quantityBefore + parseInt(quantity);
 
-        // Insert movement
         const movementResult = await client.query(
           `INSERT INTO stock_movements (
             part_id, part_code, part_name, movement_type, stock_level,
@@ -453,7 +427,6 @@ router.post("/add-stock-bulk", async (req, res) => {
           ]
         );
 
-        // Update kanban_master if part exists
         if (partId) {
           const stockLevelUpper = stock_level.toUpperCase();
           let updateColumn = "stock_m101";
@@ -509,8 +482,6 @@ router.post("/add-stock-bulk", async (req, res) => {
   }
 });
 
-// ====== REDUCE STOCK (Used when parts go out) ======
-// POST /api/stock-inventory/reduce-stock
 router.post("/reduce-stock", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -539,7 +510,6 @@ router.post("/reduce-stock", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Get part info
     const partResult = await client.query(
       `SELECT id, part_code, part_name, model, stock_m101, stock_m136, stock_off_system, stock_rtv, COALESCE(stock_scrap, 0) AS stock_scrap
        FROM kanban_master 
@@ -567,7 +537,6 @@ router.post("/reduce-stock", async (req, res) => {
       else if (stockLevelUpper === "SCRAP") quantityBefore = part.stock_scrap || 0;
     }
 
-    // Check if sufficient stock
     if (quantityBefore < parseInt(quantity)) {
       await client.query("ROLLBACK");
       return res.status(400).json({
@@ -578,10 +547,8 @@ router.post("/reduce-stock", async (req, res) => {
 
     const quantityAfter = quantityBefore - parseInt(quantity);
 
-    // Get employee ID
     const movedById = await resolveEmployeeId(client, moved_by_name);
 
-    // Insert movement record
     const movementResult = await client.query(
       `INSERT INTO stock_movements (
         part_id, part_code, part_name, movement_type, stock_level,
@@ -610,7 +577,6 @@ router.post("/reduce-stock", async (req, res) => {
       ]
     );
 
-    // Update kanban_master if part exists
     if (partId) {
       const stockLevelUpper = stock_level.toUpperCase();
       let updateColumn = "stock_m101";
@@ -651,8 +617,6 @@ router.post("/reduce-stock", async (req, res) => {
   }
 });
 
-// ====== GET ALL STOCK SUMMARY ======
-// GET /api/stock-inventory/summary
 router.get("/summary", async (req, res) => {
   try {
     const { search, limit = 50, offset = 0 } = req.query;
@@ -684,7 +648,6 @@ router.get("/summary", async (req, res) => {
       paramIndex++;
     }
 
-    // Only show parts with stock
     query += ` AND (COALESCE(km.stock_m101, 0) > 0 OR COALESCE(km.stock_m136, 0) > 0 OR COALESCE(km.stock_off_system, 0) > 0 OR COALESCE(km.stock_rtv, 0) > 0)`;
 
     query += ` ORDER BY km.part_code ASC`;

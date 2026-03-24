@@ -26,7 +26,7 @@ router.get("/", async (req, res) => {
         status_part,
         remark,
         EXISTS (
-          SELECT 1 FROM parts_enquiry_non_id pe
+          SELECT 1 FROM request_parts pe
           WHERE pe.storage_inventory_id = storage_inventory.id
             AND pe.is_active = true
             AND pe.status IN ('New', 'Waiting')

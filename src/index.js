@@ -20,7 +20,7 @@ const qcChecksRoutes = require('./routes/qcChecks');
 const stockInventoryRoutes = require('./routes/stockInventory');
 const overseaSchedulesRouter = require('./routes/overseaSchedules');
 const storageInventoryRouter = require("./routes/storageInventory");
-const partsEnquiryNonId = require("./routes/partsEnquiryNonId");
+const requestPartRouter = require("./routes/requestPart");
 const tripsRouter = require("./routes/trips");
 const activeSessionsRouter = require("./routes/activeSessions");
 const returnPartsRouter = require("./routes/returnParts");
@@ -30,7 +30,7 @@ const disposalReport       = require("./routes/disposalReport");
 const activityLogsRouter   = require('./routes/activityLogs');
 const adminDashboardRouter = require('./routes/adminDashboard');
 const formatScheduleDates = require("./middleware/dateFormatter");
-const { startArrivedScheduler } = require("./schedulers/arrivedScheduler");
+const { router: arrivedSchedulerRouter, startArrivedScheduler } = require("./routes/arrivedScheduler");
 
 const app = express();
 
@@ -72,7 +72,8 @@ app.use('/api/qc-checks', qcChecksRoutes);
 app.use('/api/stock-inventory', stockInventoryRoutes);
 app.use('/api/oversea-schedules', overseaSchedulesRouter);
 app.use("/api/storage-inventory", storageInventoryRouter)
-app.use("/api/parts-enquiry-non-id", partsEnquiryNonId);
+app.use("/api/request-part", requestPartRouter);
+app.use("/api/request-part", arrivedSchedulerRouter);
 app.use("/api/trips", tripsRouter);
 app.use("/api/active-sessions", activeSessionsRouter);
 app.use("/api/return-parts", returnPartsRouter);
