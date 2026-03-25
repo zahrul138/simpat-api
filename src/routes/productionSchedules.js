@@ -1,11 +1,7 @@
-// routes/productionSchedules.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-
-
-// ===== Helper =====
 const toStartOfDay = (val) => {
   const d = new Date(val);
   if (Number.isNaN(d.getTime())) return null;
@@ -21,7 +17,6 @@ const sanitizePalletType = (val) => {
 const toPalletLabel = (abbr) => (abbr === "W" ? "Pallet W" : "Pallet R");
 
 const resolveCustomerId = async (client, payload) => {
-  // prioritas: customerId langsung, fallback: customerName
   if (payload.customerId) return payload.customerId;
   if (!payload.customerName) {
     console.error("Missing customerName in payload:", payload);
@@ -31,7 +26,7 @@ const resolveCustomerId = async (client, payload) => {
   try {
     const { rows } = await client.query(
       `SELECT id FROM public.customers WHERE LOWER(cust_name) = LOWER($1) AND is_active = true LIMIT 1`,
-      [payload.customerName.trim()]
+      [payload.customerName.trim()],
     );
 
     if (!rows[0]) {
@@ -46,15 +41,13 @@ const resolveCustomerId = async (client, payload) => {
   }
 };
 
-// SEKARANG: Tidak perlu resolvePartId, langsung gunakan materialCode
 const resolveMaterialCode = async (client, payload) => {
   console.log(
-    `[resolveMaterialCode] Using materialCode directly: ${payload.materialCode}`
+    `[resolveMaterialCode] Using materialCode directly: ${payload.materialCode}`,
   );
   return payload.materialCode;
 };
 
-// ===== CREATE: Header + Details (sekali tembak) =====
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -74,7 +67,6 @@ router.post("/", async (req, res) => {
       detailsCount: details?.length,
     });
 
-    // 1) Validasi basic payload
     if (!lineCode || !shiftTime || !targetDate || !Array.isArray(details)) {
       return res.status(400).json({
         message: "Payload kurang lengkap.",
@@ -101,14 +93,6 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // if (td <= today) {
-    //   return res.status(400).json({
-    //     message: "Target Date harus lebih besar dari Request Date (hari ini).",
-    //     targetDate: targetDate,
-    //     today: today.toISOString().split("T")[0],
-    //   });
-    // }
-
     const dupCheck = await client.query(
       `SELECT id, prod_schedule_code
        FROM public.production_schedules
@@ -117,7 +101,7 @@ router.post("/", async (req, res) => {
          AND target_date = $3::date
          AND is_active   = true
        LIMIT 1`,
-      [lineCode, shiftTime, targetDate]
+      [lineCode, shiftTime, targetDate],
     );
 
     if (dupCheck.rowCount > 0) {
@@ -127,16 +111,14 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 4) Transaksi insert header + details
     await client.query("BEGIN");
 
-    // Insert header
     const insertHeader = await client.query(
       `INSERT INTO public.production_schedules
          (line_code, shift_time, target_date, status, created_by)
        VALUES ($1, $2, $3::date, 'New', $4)
        RETURNING id, prod_schedule_code, created_at`,
-      [lineCode, shiftTime, targetDate, createdBy ?? null]
+      [lineCode, shiftTime, targetDate, createdBy ?? null],
     );
 
     const scheduleId = insertHeader.rows[0].id;
@@ -144,7 +126,6 @@ router.post("/", async (req, res) => {
 
     console.log(`Created schedule header: ${scheduleCode} (ID: ${scheduleId})`);
 
-    // 4a) Resolve customer_id & material_code untuk tiap detail
     const resolved = [];
     const unmapped = [];
 
@@ -160,13 +141,11 @@ router.post("/", async (req, res) => {
       const materialCode = await resolveMaterialCode(client, d);
 
       console.log(
-        `Resolved - Customer ID: ${customerId}, Material Code: ${materialCode}`
+        `Resolved - Customer ID: ${customerId}, Material Code: ${materialCode}`,
       );
 
-      // pallet type "Pallet R/W" atau "R/W" kita jadikan "R"/"W"
       const palletType = sanitizePalletType(d.palletType);
 
-      // build PO number (string kosong -> null)
       const poRaw =
         typeof d.poNumber === "string" ? d.poNumber.trim() : d.poNumber;
       const poValue = poRaw === "" ? null : poRaw;
@@ -193,7 +172,6 @@ router.post("/", async (req, res) => {
         },
       });
 
-      // HANYA check customer_id, material_code selalu ada
       if (!customerId) {
         unmapped.push({
           index: i + 1,
@@ -216,7 +194,6 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 4b) Insert details satu per satu (LEBIH AMAN - menghindari parameter mismatch)
     const detailIds = [];
     for (let i = 0; i < resolved.length; i++) {
       const r = resolved[i];
@@ -241,11 +218,11 @@ router.post("/", async (req, res) => {
             r.pallet_status,
             r.model,
             r.description,
-          ]
+          ],
         );
         detailIds.push(detailResult.rows[0].id);
         console.log(
-          `Inserted detail ${i + 1} with ID: ${detailResult.rows[0].id}`
+          `Inserted detail ${i + 1} with ID: ${detailResult.rows[0].id}`,
         );
       } catch (err) {
         console.error(`Error inserting detail ${i + 1}:`, err);
@@ -255,7 +232,6 @@ router.post("/", async (req, res) => {
 
     console.log(`Successfully inserted ${detailIds.length} detail records`);
 
-    // 5) Hitung & update total pada header
     const sumRes = await client.query(
       `SELECT
         COALESCE(SUM(input_quantity), 0) AS total_input,
@@ -264,7 +240,7 @@ router.post("/", async (req, res) => {
         COALESCE(COUNT(*), 0) AS total_pallet
       FROM public.production_schedule_details
       WHERE production_schedule_id = $1`,
-      [scheduleId]
+      [scheduleId],
     );
 
     const t = sumRes.rows[0];
@@ -282,7 +258,7 @@ router.post("/", async (req, res) => {
         t.total_model,
         t.total_pallet,
         scheduleId,
-      ]
+      ],
     );
 
     await client.query("COMMIT");
@@ -305,7 +281,6 @@ router.post("/", async (req, res) => {
       message: "Production schedule berhasil dibuat beserta details-nya.",
     });
   } catch (err) {
-    // rollback ke client yang sama
     try {
       await client.query("ROLLBACK");
       console.log("Transaction rolled back due to error");
@@ -320,7 +295,6 @@ router.post("/", async (req, res) => {
       stack: err.stack,
     });
 
-    // Error handling yang lebih spesifik
     if (err.code === "23505") {
       return res.status(409).json({
         message:
@@ -350,7 +324,6 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Generic error
     return res.status(500).json({
       message: "Server error.",
       error:
@@ -363,7 +336,6 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ===== READ: List header (filter + paging + search) =====
 router.get("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -406,7 +378,6 @@ router.get("/", async (req, res) => {
       wh.push(`ps.target_date <= $${params.length}::date`);
     }
 
-    // untuk search ke detail: join ringan
     let searchJoin = "";
     if (q && q.trim() !== "") {
       searchJoin = `
@@ -424,7 +395,6 @@ router.get("/", async (req, res) => {
 
     const whereSql = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
 
-    // COUNT total
     const countSql = `
       SELECT COUNT(DISTINCT ps.id) AS total
       FROM public.production_schedules ps
@@ -464,44 +434,41 @@ router.get("/", async (req, res) => {
     `;
     const dataRes = await client.query(dataSql, params);
 
-    // Fungsi untuk memformat tanggal ke YYYY-MM-DD
     const formatToYYYYMMDD = (dateString) => {
       if (!dateString) return null;
       try {
         let dateObj;
-        // Jika sudah berupa Date object (dari PostgreSQL pg driver)
+
         if (dateString instanceof Date) {
           dateObj = dateString;
         } else {
           const str = String(dateString);
-          // Jika tanggal sudah mengandung T (ISO format)
-          if (str.includes('T')) {
+
+          if (str.includes("T")) {
             dateObj = new Date(str);
           } else {
-            // Jika hanya YYYY-MM-DD
-            dateObj = new Date(str + 'T00:00:00');
+            dateObj = new Date(str + "T00:00:00");
           }
         }
-        // Validasi tanggal
+
         if (isNaN(dateObj.getTime())) {
-          console.warn('Invalid date value:', dateString);
+          console.warn("Invalid date value:", dateString);
           return String(dateString);
         }
-        // Format ke YYYY-MM-DD
+
         const year = dateObj.getFullYear();
-        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-        const day = String(dateObj.getDate()).padStart(2, '0');
+        const month = String(dateObj.getMonth() + 1).padStart(2, "0");
+        const day = String(dateObj.getDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       } catch (error) {
-        console.error('Error formatting date:', error.message);
+        console.error("Error formatting date:", error.message);
         return String(dateString);
       }
     };
 
-    // Map hasil query dan tambahkan target_date_display
     const items = dataRes.rows.map((r) => {
       const formattedDate = formatToYYYYMMDD(r.target_date);
-      
+
       return {
         id: r.id,
         code: r.prod_schedule_code,
@@ -537,7 +504,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ===== READ: Detail per header =====
 router.get("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -568,7 +534,7 @@ router.get("/:id", async (req, res) => {
       LEFT JOIN public.employees e ON e.id = ps.created_by::int
       WHERE ps.id = $1
       LIMIT 1`,
-      [id]
+      [id],
     );
 
     if (hdrRes.rowCount === 0) {
@@ -592,7 +558,7 @@ router.get("/:id", async (req, res) => {
       LEFT JOIN public.customers c ON c.id = d.customer_id
       WHERE d.production_schedule_id = $1
       ORDER BY d.sequence_number ASC, d.id ASC`,
-      [id]
+      [id],
     );
 
     const header = hdrRes.rows[0];
@@ -611,37 +577,35 @@ router.get("/:id", async (req, res) => {
       status: r.status || "New",
     }));
 
-    // Fungsi untuk memformat tanggal ke YYYY-MM-DD
     const formatToYYYYMMDD = (dateString) => {
       if (!dateString) return null;
       try {
         let dateObj;
-        // Jika sudah berupa Date object (dari PostgreSQL pg driver)
+
         if (dateString instanceof Date) {
           dateObj = dateString;
         } else {
           const str = String(dateString);
-          if (str.includes('T')) {
+          if (str.includes("T")) {
             dateObj = new Date(str);
           } else {
-            dateObj = new Date(str + 'T00:00:00');
+            dateObj = new Date(str + "T00:00:00");
           }
         }
         if (isNaN(dateObj.getTime())) {
-          console.warn('Invalid date value:', dateString);
+          console.warn("Invalid date value:", dateString);
           return String(dateString);
         }
         const year = dateObj.getFullYear();
-        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-        const day = String(dateObj.getDate()).padStart(2, '0');
+        const month = String(dateObj.getMonth() + 1).padStart(2, "0");
+        const day = String(dateObj.getDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       } catch (error) {
-        console.error('Error formatting date:', error.message);
+        console.error("Error formatting date:", error.message);
         return dateString;
       }
     };
 
-    // Format tanggal untuk header
     const formattedDate = formatToYYYYMMDD(header.target_date);
 
     return res.json({
@@ -661,7 +625,7 @@ router.get("/:id", async (req, res) => {
         created_by_name:
           header.created_by_name ||
           `${header.created_by} | ${new Date(header.created_at).toLocaleString(
-            "id-ID"
+            "id-ID",
           )}`,
         created_at: header.created_at,
       },
@@ -692,26 +656,39 @@ router.patch("/:id/status", async (req, res) => {
       });
     }
 
+    await client.query("BEGIN");
+
     const result = await client.query(
       `UPDATE public.production_schedules 
        SET status = $1, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $2 AND is_active = true
        RETURNING id, prod_schedule_code, status`,
-      [status, id]
+      [status, id],
     );
 
     if (result.rowCount === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ message: "Schedule tidak ditemukan." });
     }
+
+    await client.query(
+      `UPDATE public.production_schedule_details
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE production_schedule_id = $2`,
+      [status, id],
+    );
+
+    await client.query("COMMIT");
 
     return res.json({
       message: "Status berhasil diupdate",
       data: result.rows[0],
     });
   } catch (err) {
+    await client.query("ROLLBACK");
     console.error(
       "ERR PATCH /api/production-schedules/:id/status",
-      err.message
+      err.message,
     );
     return res.status(500).json({ message: "Server error." });
   } finally {
@@ -719,7 +696,6 @@ router.patch("/:id/status", async (req, res) => {
   }
 });
 
-// ===== DELETE: Permanent delete schedule =====
 router.delete("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -729,27 +705,25 @@ router.delete("/:id", async (req, res) => {
     }
 
     console.log(
-      `[DELETE /api/production-schedules/${id}] Permanent delete requested`
+      `[DELETE /api/production-schedules/${id}] Permanent delete requested`,
     );
 
     await client.query("BEGIN");
 
-    // 1. Hapus details terlebih dahulu (karena foreign key constraint)
     const deleteDetails = await client.query(
       `DELETE FROM public.production_schedule_details 
        WHERE production_schedule_id = $1 
        RETURNING id`,
-      [id]
+      [id],
     );
 
     console.log(`Deleted ${deleteDetails.rowCount} detail records`);
 
-    // 2. Hapus header
     const deleteHeader = await client.query(
       `DELETE FROM public.production_schedules 
        WHERE id = $1 
        RETURNING id, prod_schedule_code, line_code, shift_time, target_date`,
-      [id]
+      [id],
     );
 
     if (deleteHeader.rowCount === 0) {
@@ -762,7 +736,7 @@ router.delete("/:id", async (req, res) => {
     const deletedSchedule = deleteHeader.rows[0];
 
     console.log(
-      `[DELETE /api/production-schedules/${id}] Successfully deleted: ${deletedSchedule.prod_schedule_code}`
+      `[DELETE /api/production-schedules/${id}] Successfully deleted: ${deletedSchedule.prod_schedule_code}`,
     );
 
     return res.json({
@@ -781,7 +755,6 @@ router.delete("/:id", async (req, res) => {
     await client.query("ROLLBACK");
     console.error(`[DELETE /api/production-schedules/${id}] Error:`, err);
 
-    // Handle foreign key constraint error
     if (err.code === "23503") {
       return res.status(400).json({
         success: false,
@@ -801,7 +774,6 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// DELETE detail individual - PASTIKAN ROUTE INI ADA
 router.delete("/details/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -812,10 +784,9 @@ router.delete("/details/:id", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Dapatkan schedule_id sebelum menghapus
     const getDetail = await client.query(
       `SELECT production_schedule_id FROM public.production_schedule_details WHERE id = $1`,
-      [id]
+      [id],
     );
 
     if (getDetail.rowCount === 0) {
@@ -825,13 +796,11 @@ router.delete("/details/:id", async (req, res) => {
 
     const scheduleId = getDetail.rows[0].production_schedule_id;
 
-    // Hapus detail
     const deleteResult = await client.query(
       `DELETE FROM public.production_schedule_details WHERE id = $1 RETURNING id`,
-      [id]
+      [id],
     );
 
-    // Update totals di header
     const sumRes = await client.query(
       `SELECT
         COALESCE(SUM(input_quantity), 0) AS total_input,
@@ -840,7 +809,7 @@ router.delete("/details/:id", async (req, res) => {
         COALESCE(COUNT(*), 0) AS total_pallet
       FROM public.production_schedule_details
       WHERE production_schedule_id = $1`,
-      [scheduleId]
+      [scheduleId],
     );
 
     const t = sumRes.rows[0];
@@ -858,7 +827,7 @@ router.delete("/details/:id", async (req, res) => {
         t.total_model,
         t.total_pallet,
         scheduleId,
-      ]
+      ],
     );
 
     await client.query("COMMIT");
@@ -882,13 +851,215 @@ router.delete("/details/:id", async (req, res) => {
   }
 });
 
-// Helper: ambil tanggal lokal (YYYY-MM-DD) tanpa toISOString agar tidak terpengaruh timezone UTC
 const getLocalDateString = (d) => {
   const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
+
+router.post("/:id/details", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const scheduleId = Number(req.params.id || 0);
+    if (!scheduleId)
+      return res.status(400).json({ message: "Invalid schedule id." });
+
+    const { customerName, materialCode, model, input, poNumber, description } =
+      req.body || {};
+
+    if (!customerName)
+      return res.status(400).json({ message: "customerName is required." });
+    if (!input || Number(input) <= 0)
+      return res.status(400).json({ message: "Input must be greater than 0." });
+
+    await client.query("BEGIN");
+
+    const schedRes = await client.query(
+      `SELECT id FROM public.production_schedules WHERE id = $1 AND is_active = true`,
+      [scheduleId],
+    );
+    if (schedRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Schedule tidak ditemukan." });
+    }
+
+    const custRes = await client.query(
+      `SELECT id, default_pallet_type, pallet_capacity, min_pallet_w_quantity
+       FROM public.customers WHERE LOWER(cust_name) = LOWER($1) AND is_active = true LIMIT 1`,
+      [customerName],
+    );
+    if (custRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res
+        .status(400)
+        .json({ message: `Customer "${customerName}" tidak ditemukan.` });
+    }
+
+    const custRow = custRes.rows[0];
+    const customerId = custRow.id;
+    const defType = custRow.default_pallet_type || "R";
+    const R_CAP = 16;
+    const cap = Number(custRow.pallet_capacity) || (defType === "W" ? 32 : 16);
+    const minW = Number(custRow.min_pallet_w_quantity ?? 5);
+
+    const seqRes = await client.query(
+      `SELECT COALESCE(MAX(sequence_number), 0) AS max_seq FROM public.production_schedule_details WHERE production_schedule_id = $1`,
+      [scheduleId],
+    );
+    let seqNum = Number(seqRes.rows[0].max_seq);
+
+    const baseRow = {
+      production_schedule_id: scheduleId,
+      customer_id: customerId,
+      material_code: materialCode || null,
+      model_name: model || null,
+      po_number: poNumber || null,
+      description: description || null,
+      is_auto_split: false,
+      pallet_status: "Pending",
+    };
+
+    const originalInput = Number(input);
+    const rows = [];
+    let remaining = originalInput;
+
+    if (defType === "W") {
+      const existedRes = await client.query(
+        `SELECT COALESCE(SUM(input_quantity), 0) AS existed
+         FROM public.production_schedule_details
+         WHERE production_schedule_id = $1 AND customer_id = $2 AND pallet_type = 'W'
+         AND ($3::text IS NULL OR po_number = $3)`,
+        [scheduleId, customerId, poNumber || null],
+      );
+      const existed = Number(existedRes.rows[0].existed);
+
+      if (existed === 0 && remaining <= cap) {
+        rows.push({
+          ...baseRow,
+          input_quantity: remaining,
+          original_input: originalInput,
+          pallet_type: remaining < minW ? "R" : "W",
+        });
+      } else {
+        const roomW = Math.max(0, cap - existed);
+        if (roomW > 0) {
+          const chunk = Math.min(roomW, remaining);
+          rows.push({
+            ...baseRow,
+            input_quantity: chunk,
+            original_input: originalInput,
+            pallet_type: "W",
+          });
+          remaining -= chunk;
+        }
+        while (remaining > 0) {
+          if (remaining < minW) {
+            rows.push({
+              ...baseRow,
+              input_quantity: remaining,
+              original_input: originalInput,
+              pallet_type: "R",
+            });
+            remaining = 0;
+          } else if (remaining <= cap) {
+            rows.push({
+              ...baseRow,
+              input_quantity: remaining,
+              original_input: originalInput,
+              pallet_type: "W",
+            });
+            remaining = 0;
+          } else {
+            rows.push({
+              ...baseRow,
+              input_quantity: cap,
+              original_input: originalInput,
+              pallet_type: "W",
+            });
+            remaining -= cap;
+          }
+        }
+      }
+    } else {
+      while (remaining > 0) {
+        const chunk = Math.min(R_CAP, remaining);
+        rows.push({
+          ...baseRow,
+          input_quantity: chunk,
+          original_input: originalInput,
+          pallet_type: "R",
+        });
+        remaining -= chunk;
+      }
+    }
+
+    const insertedIds = [];
+    for (const r of rows) {
+      seqNum += 1;
+      const ins = await client.query(
+        `INSERT INTO public.production_schedule_details
+          (production_schedule_id, customer_id, material_code, model_name, input_quantity, po_number, description, sequence_number, pallet_type, is_auto_split, original_input, pallet_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id`,
+        [
+          r.production_schedule_id,
+          r.customer_id,
+          r.material_code,
+          r.model_name,
+          r.input_quantity,
+          r.po_number,
+          r.description,
+          seqNum,
+          r.pallet_type,
+          r.is_auto_split,
+          r.original_input,
+          r.pallet_status,
+        ],
+      );
+      insertedIds.push(ins.rows[0].id);
+    }
+
+    const sumRes = await client.query(
+      `SELECT
+        COALESCE(SUM(input_quantity), 0) AS total_input,
+        COALESCE(COUNT(DISTINCT customer_id), 0) AS total_customer,
+        COALESCE(COUNT(DISTINCT material_code), 0) AS total_model,
+        COALESCE(COUNT(*), 0) AS total_pallet
+       FROM public.production_schedule_details
+       WHERE production_schedule_id = $1`,
+      [scheduleId],
+    );
+    const t = sumRes.rows[0];
+    await client.query(
+      `UPDATE public.production_schedules
+         SET total_input = $1, total_customer = $2, total_model = $3, total_pallet = $4, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $5`,
+      [
+        t.total_input,
+        t.total_customer,
+        t.total_model,
+        t.total_pallet,
+        scheduleId,
+      ],
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: "Detail berhasil ditambahkan",
+      insertedCount: rows.length,
+      insertedIds,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ERR POST /api/production-schedules/:id/details", err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+});
 
 router.patch("/auto-progress", async (req, res) => {
   const client = await pool.connect();
@@ -897,9 +1068,7 @@ router.patch("/auto-progress", async (req, res) => {
     const currentTime = now.toTimeString().slice(0, 5); // HH:MM
     const currentDate = getLocalDateString(now); // LOCAL date (bukan UTC)
 
-    console.log(
-      `[AUTO-PROGRESS] Checking at ${currentTime} on ${currentDate}`
-    );
+    console.log(`[AUTO-PROGRESS] Checking at ${currentTime} on ${currentDate}`);
 
     const schedulesToProgress = await client.query(
       `SELECT 
@@ -913,11 +1082,11 @@ router.patch("/auto-progress", async (req, res) => {
          AND ps.target_date = $1::date
          AND $2 >= SPLIT_PART(ps.shift_time, ' - ', 1)  -- current time >= start time
        ORDER BY ps.shift_time`,
-      [currentDate, currentTime]
+      [currentDate, currentTime],
     );
 
     console.log(
-      `[AUTO-PROGRESS] Found ${schedulesToProgress.rowCount} schedules to progress`
+      `[AUTO-PROGRESS] Found ${schedulesToProgress.rowCount} schedules to progress`,
     );
 
     if (schedulesToProgress.rowCount === 0) {
@@ -939,7 +1108,7 @@ router.patch("/auto-progress", async (req, res) => {
          SET status = 'OnProgress', 
              updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1`,
-        [scheduleId]
+        [scheduleId],
       );
 
       await client.query(
@@ -947,7 +1116,7 @@ router.patch("/auto-progress", async (req, res) => {
          SET status = 'OnProgress', 
              updated_at = CURRENT_TIMESTAMP 
          WHERE production_schedule_id = $1`,
-        [scheduleId]
+        [scheduleId],
       );
 
       progressedSchedules.push({
@@ -1001,7 +1170,7 @@ router.patch("/details/:id/status", async (req, res) => {
        SET status = $1, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $2
        RETURNING id, status`,
-      [status, id]
+      [status, id],
     );
 
     if (result.rowCount === 0) {
@@ -1015,7 +1184,7 @@ router.patch("/details/:id/status", async (req, res) => {
   } catch (err) {
     console.error(
       "ERR PATCH /api/production-schedules/details/:id/status",
-      err
+      err,
     );
     return res.status(500).json({ message: "Server error." });
   } finally {
@@ -1039,7 +1208,7 @@ router.get("/:id/check-status", async (req, res) => {
         SPLIT_PART(shift_time, ' - ', 2) as end_time
        FROM public.production_schedules 
        WHERE id = $1 AND is_active = true`,
-      [id]
+      [id],
     );
 
     if (scheduleRes.rowCount === 0) {
@@ -1093,7 +1262,7 @@ router.get("/:id/check-status", async (req, res) => {
   } catch (err) {
     console.error(
       "ERR GET /api/production-schedules/:id/check-status",
-      err.message
+      err.message,
     );
     return res.status(500).json({ message: "Server error." });
   } finally {
@@ -1109,17 +1278,14 @@ router.patch("/auto-complete", async (req, res) => {
     const currentMinutes = now.getMinutes();
     const currentSeconds = now.getSeconds();
 
-    // Format waktu saat ini: HH:MM
-    const currentTime = `${currentHours.toString().padStart(2, '0')}:${currentMinutes.toString().padStart(2, '0')}`;
+    const currentTime = `${currentHours.toString().padStart(2, "0")}:${currentMinutes.toString().padStart(2, "0")}`;
 
-    // Format tanggal LOCAL (bukan toISOString yang UTC — jam 00-06 WIB bisa beri tanggal kemarin)
     const currentDate = getLocalDateString(now);
 
     console.log(
-      `[AUTO-COMPLETE] Checking at ${currentTime}:${currentSeconds} on ${currentDate}`
+      `[AUTO-COMPLETE] Checking at ${currentTime}:${currentSeconds} on ${currentDate}`,
     );
 
-    // Ambil schedule OnProgress untuk hari ini
     const schedulesToCheck = await client.query(
       `SELECT 
         ps.id, 
@@ -1133,11 +1299,11 @@ router.patch("/auto-complete", async (req, res) => {
          AND ps.is_active = true
          AND ps.target_date = $1::date
        ORDER BY ps.shift_time`,
-      [currentDate]
+      [currentDate],
     );
 
     console.log(
-      `[AUTO-COMPLETE] Found ${schedulesToCheck.rowCount} OnProgress schedules for today`
+      `[AUTO-COMPLETE] Found ${schedulesToCheck.rowCount} OnProgress schedules for today`,
     );
 
     if (schedulesToCheck.rowCount === 0) {
@@ -1158,14 +1324,16 @@ router.patch("/auto-complete", async (req, res) => {
       const endTimeWithSeconds = endTime + ":00";
 
       if (currentTime >= endTime) {
-        console.log(`[AUTO-COMPLETE] Schedule ${scheduleId}: ${currentTime} >= ${endTime}, completing...`);
-        
+        console.log(
+          `[AUTO-COMPLETE] Schedule ${scheduleId}: ${currentTime} >= ${endTime}, completing...`,
+        );
+
         await client.query(
           `UPDATE public.production_schedules 
            SET status = 'Complete', 
                updated_at = CURRENT_TIMESTAMP 
            WHERE id = $1`,
-          [scheduleId]
+          [scheduleId],
         );
 
         await client.query(
@@ -1173,7 +1341,7 @@ router.patch("/auto-complete", async (req, res) => {
            SET status = 'Complete', 
                updated_at = CURRENT_TIMESTAMP 
            WHERE production_schedule_id = $1`,
-          [scheduleId]
+          [scheduleId],
         );
 
         completedSchedules.push({
@@ -1181,10 +1349,12 @@ router.patch("/auto-complete", async (req, res) => {
           shift_time: schedule.shift_time,
           target_date: schedule.target_date,
           completed_at: now.toISOString(),
-          reason: `Shift ended at ${endTime}, current time is ${currentTime}`
+          reason: `Shift ended at ${endTime}, current time is ${currentTime}`,
         });
       } else {
-        console.log(`[AUTO-COMPLETE] Schedule ${scheduleId}: ${currentTime} < ${endTime}, still in progress`);
+        console.log(
+          `[AUTO-COMPLETE] Schedule ${scheduleId}: ${currentTime} < ${endTime}, still in progress`,
+        );
       }
     }
 
@@ -1195,7 +1365,7 @@ router.patch("/auto-complete", async (req, res) => {
       completed: completedSchedules.length,
       schedules: completedSchedules,
       current_time: currentTime,
-      current_date: currentDate
+      current_date: currentDate,
     });
   } catch (err) {
     await client.query("ROLLBACK");
@@ -1209,42 +1379,41 @@ router.patch("/auto-complete", async (req, res) => {
   }
 });
 
-// ===== PATCH /:id/approve-units =====
-// Body: { count: N, approved_by_id: empId, remark: "..." (single only) }
 router.patch("/:id/approve-units", async (req, res) => {
   const client = await pool.connect();
   try {
-    const id    = Number(req.params.id || 0);
+    const id = Number(req.params.id || 0);
     const count = Number(req.body?.count ?? 1);
     const approvedById = req.body?.approved_by_id || null;
-    const remark       = req.body?.remark         || null;
+    const remark = req.body?.remark || null;
 
     if (!id) return res.status(400).json({ message: "Invalid id." });
     if (!Number.isInteger(count) || count < 1)
-      return res.status(400).json({ message: "count must be a positive integer." });
+      return res
+        .status(400)
+        .json({ message: "count must be a positive integer." });
 
     const cur = await client.query(
       `SELECT total_input, actual_input, prod_schedule_code FROM public.production_schedules WHERE id = $1 AND is_active = true`,
-      [id]
+      [id],
     );
     if (cur.rowCount === 0)
       return res.status(404).json({ message: "Schedule tidak ditemukan." });
 
-    const totalInput        = Number(cur.rows[0].total_input  || 0);
-    const actualInput       = Number(cur.rows[0].actual_input || 0);
-    const prodScheduleCode  = cur.rows[0].prod_schedule_code || null;
+    const totalInput = Number(cur.rows[0].total_input || 0);
+    const actualInput = Number(cur.rows[0].actual_input || 0);
+    const prodScheduleCode = cur.rows[0].prod_schedule_code || null;
 
     await client.query("BEGIN");
 
     const now = new Date();
 
-    // Build model breakdown dari details
     const detailsForModel = await client.query(
       `SELECT d.input_quantity, COALESCE(d.model, 'Veronicas') AS model
        FROM public.production_schedule_details d
        WHERE d.production_schedule_id = $1
        ORDER BY d.sequence_number ASC, d.id ASC`,
-      [id]
+      [id],
     );
     let cumModel = 0;
     const modelBreakdown = detailsForModel.rows.map((r) => {
@@ -1256,31 +1425,39 @@ router.patch("/:id/approve-units", async (req, res) => {
       for (const b of modelBreakdown) {
         if (u > b.start && u <= b.end) return b.model;
       }
-      return modelBreakdown.length > 0 ? modelBreakdown[modelBreakdown.length - 1].model : null;
+      return modelBreakdown.length > 0
+        ? modelBreakdown[modelBreakdown.length - 1].model
+        : null;
     };
 
-    // Ambil semua unit yang sudah ada record (approved atau skipped)
     const existingRes = await client.query(
       `SELECT unit_no, COALESCE(status, 'approved') AS status
        FROM public.target_scan_approvals WHERE schedule_id = $1`,
-      [id]
+      [id],
     );
     const existingMap = {};
-    existingRes.rows.forEach((r) => { existingMap[Number(r.unit_no)] = r.status; });
+    existingRes.rows.forEach((r) => {
+      existingMap[Number(r.unit_no)] = r.status;
+    });
 
-    // Cari unit Pending pertama (bukan approved, bukan skipped)
-    // untuk menentukan titik awal — lalu fill sebanyak count
     let filledCount = 0;
     let nextUnit = 1;
     const approvedModels = new Set();
-    // Lewati unit yang sudah approved (agar tidak double count)
-    while (nextUnit <= totalInput && existingMap[nextUnit] === 'approved') nextUnit++;
+
+    while (nextUnit <= totalInput && existingMap[nextUnit] === "approved")
+      nextUnit++;
 
     while (filledCount < count && nextUnit <= totalInput) {
       const existStatus = existingMap[nextUnit];
-      if (existStatus === 'skipped') { nextUnit++; continue; }
-      if (existStatus === 'approved') { nextUnit++; continue; }
-      // Unit ini Pending — approve
+      if (existStatus === "skipped") {
+        nextUnit++;
+        continue;
+      }
+      if (existStatus === "approved") {
+        nextUnit++;
+        continue;
+      }
+
       const unitModel = getModelForUnit(nextUnit);
       if (unitModel) approvedModels.add(unitModel);
       await client.query(
@@ -1289,18 +1466,18 @@ router.patch("/:id/approve-units", async (req, res) => {
          ON CONFLICT (schedule_id, unit_no) DO UPDATE
            SET status = 'approved', remark = EXCLUDED.remark,
                approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at`,
-        [id, nextUnit, remark || null, approvedById, now]
+        [id, nextUnit, remark || null, approvedById, now],
       );
       filledCount++;
       nextUnit++;
     }
-    const approvedModelStr = approvedModels.size > 0 ? [...approvedModels].join(', ') : null;
+    const approvedModelStr =
+      approvedModels.size > 0 ? [...approvedModels].join(", ") : null;
 
-    // Hitung ulang actual_input = hanya unit berstatus approved
     const approvedCountRes = await client.query(
       `SELECT COUNT(*) AS cnt FROM public.target_scan_approvals
        WHERE schedule_id = $1 AND COALESCE(status, 'approved') = 'approved'`,
-      [id]
+      [id],
     );
     const updatedActual = Number(approvedCountRes.rows[0].cnt);
 
@@ -1309,33 +1486,31 @@ router.patch("/:id/approve-units", async (req, res) => {
          SET actual_input = $1, updated_at = CURRENT_TIMESTAMP
        WHERE id = $2 AND is_active = true
        RETURNING id, prod_schedule_code, total_input, actual_input`,
-      [updatedActual, id]
+      [updatedActual, id],
     );
 
-    // Resolve approvedByName inside transaction
     let approvedByName = null;
     if (approvedById) {
       const empRes = await client.query(
         `SELECT emp_name FROM public.employees WHERE id = $1 LIMIT 1`,
-        [approvedById]
+        [approvedById],
       );
       if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
     }
 
-    // Deduct stock_m101 + insert stock_movements record per part
     if (filledCount > 0) {
       const partsRes = await client.query(
         `SELECT id, part_code, part_name, stock_m101, qty_per_assembly FROM kanban_master
-         WHERE is_active = true AND qty_per_assembly > 0`
+         WHERE is_active = true AND qty_per_assembly > 0`,
       );
       for (const part of partsRes.rows) {
-        const deduct   = (part.qty_per_assembly || 1) * filledCount;
+        const deduct = (part.qty_per_assembly || 1) * filledCount;
         const newStock = Math.max(0, (part.stock_m101 || 0) - deduct);
         await client.query(
           `UPDATE kanban_master SET stock_m101 = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-          [newStock, part.id]
+          [newStock, part.id],
         );
-        // Insert 1 movement record per part (gabungan semua unit yang di-approve)
+
         await client.query(
           `INSERT INTO stock_movements (
              part_id, part_code, part_name, movement_type, stock_level,
@@ -1344,16 +1519,18 @@ router.patch("/:id/approve-units", async (req, res) => {
              moved_by, moved_by_name, moved_at
            ) VALUES ($1,$2,$3,'OUT','M101',$4,$5,$6,'finish_good',$7,$8,$9,$10,$11,CURRENT_TIMESTAMP)`,
           [
-            part.id, part.part_code, part.part_name,
+            part.id,
+            part.part_code,
+            part.part_name,
             deduct,
             part.stock_m101,
             newStock,
             prodScheduleCode,
             approvedModelStr,
-            remark || '-',
+            remark || "-",
             approvedById || null,
             approvedByName || null,
-          ]
+          ],
         );
       }
     }
@@ -1367,14 +1544,16 @@ router.patch("/:id/approve-units", async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("ERR PATCH /api/production-schedules/:id/approve-units", err.message);
+    console.error(
+      "ERR PATCH /api/production-schedules/:id/approve-units",
+      err.message,
+    );
     return res.status(500).json({ message: "Server error." });
   } finally {
     client.release();
   }
 });
 
-// ===== GET /:id/scan-approvals =====
 router.get("/:id/scan-approvals", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1397,34 +1576,39 @@ router.get("/:id/scan-approvals", async (req, res) => {
        LEFT JOIN public.employees e ON e.id = a.approved_by
        WHERE a.schedule_id = $1
        ORDER BY a.unit_no`,
-      [id]
+      [id],
     );
 
     return res.json(result.rows);
   } catch (err) {
-    console.error("ERR GET /api/production-schedules/:id/scan-approvals", err.message);
+    console.error(
+      "ERR GET /api/production-schedules/:id/scan-approvals",
+      err.message,
+    );
     return res.status(500).json({ message: "Server error." });
   } finally {
     client.release();
   }
 });
 
-// ===== PATCH /:id/skip-unit =====
 router.patch("/:id/skip-unit", async (req, res) => {
   const client = await pool.connect();
   try {
     const scheduleId = Number(req.params.id || 0);
     const { unit_no, remark } = req.body || {};
     if (!scheduleId) return res.status(400).json({ message: "Invalid id." });
-    if (!unit_no)    return res.status(400).json({ message: "unit_no required." });
+    if (!unit_no) return res.status(400).json({ message: "unit_no required." });
     if (!remark || !String(remark).trim())
-      return res.status(400).json({ message: "Remark wajib diisi untuk Skip." });
+      return res
+        .status(400)
+        .json({ message: "Remark wajib diisi untuk Skip." });
 
     const cur = await client.query(
       `SELECT id FROM public.production_schedules WHERE id = $1 AND is_active = true`,
-      [scheduleId]
+      [scheduleId],
     );
-    if (cur.rowCount === 0) return res.status(404).json({ message: "Schedule tidak ditemukan." });
+    if (cur.rowCount === 0)
+      return res.status(404).json({ message: "Schedule tidak ditemukan." });
 
     await client.query("BEGIN");
     await client.query(
@@ -1432,20 +1616,23 @@ router.patch("/:id/skip-unit", async (req, res) => {
        VALUES ($1, $2, $3, NULL, CURRENT_TIMESTAMP, 'skipped')
        ON CONFLICT (schedule_id, unit_no) DO UPDATE
          SET remark = EXCLUDED.remark, approved_at = EXCLUDED.approved_at, status = 'skipped'`,
-      [scheduleId, unit_no, remark]
+      [scheduleId, unit_no, remark],
     );
     const skipCountRes = await client.query(
       `SELECT COUNT(*) AS cnt FROM public.target_scan_approvals
        WHERE schedule_id = $1 AND COALESCE(status, 'approved') = 'approved'`,
-      [scheduleId]
+      [scheduleId],
     );
     const skipNewActual = Number(skipCountRes.rows[0].cnt);
     await client.query(
       `UPDATE public.production_schedules SET actual_input = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [skipNewActual, scheduleId]
+      [skipNewActual, scheduleId],
     );
     await client.query("COMMIT");
-    return res.json({ message: `Unit ${unit_no} di-skip`, new_actual_input: skipNewActual });
+    return res.json({
+      message: `Unit ${unit_no} di-skip`,
+      new_actual_input: skipNewActual,
+    });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("ERR PATCH /:id/skip-unit", err.message);
@@ -1455,8 +1642,6 @@ router.patch("/:id/skip-unit", async (req, res) => {
   }
 });
 
-// ===== PATCH /:id/approve-single =====
-// Approve unit_no spesifik (untuk tab Complete - tidak harus sequential dari actual_input)
 router.patch("/:id/approve-single", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1467,45 +1652,53 @@ router.patch("/:id/approve-single", async (req, res) => {
 
     const cur = await client.query(
       `SELECT total_input, actual_input FROM public.production_schedules WHERE id = $1 AND is_active = true`,
-      [scheduleId]
+      [scheduleId],
     );
-    if (cur.rowCount === 0) return res.status(404).json({ message: "Schedule tidak ditemukan." });
+    if (cur.rowCount === 0)
+      return res.status(404).json({ message: "Schedule tidak ditemukan." });
 
-    // Ambil customer dari breakdown
     const detailRes = await client.query(
       `SELECT c.cust_name, d.input_quantity, COALESCE(d.model, 'Veronicas') AS model
        FROM public.production_schedule_details d
        LEFT JOIN public.customers c ON c.id = d.customer_id
        WHERE d.production_schedule_id = $1
        ORDER BY d.sequence_number ASC, d.id ASC`,
-      [scheduleId]
+      [scheduleId],
     );
     let cumulative = 0;
     const breakdown = detailRes.rows.map((row) => {
       const start = cumulative;
       cumulative += Number(row.input_quantity || 0);
-      return { cust_name: row.cust_name, model: row.model || 'Veronicas', start, end: cumulative };
+      return {
+        cust_name: row.cust_name,
+        model: row.model || "Veronicas",
+        start,
+        end: cumulative,
+      };
     });
     const getCustomer = (u) => {
       for (const b of breakdown) {
         if (u > b.start && u <= b.end) return b.cust_name || null;
       }
-      return breakdown.length > 0 ? breakdown[breakdown.length - 1].cust_name || null : null;
+      return breakdown.length > 0
+        ? breakdown[breakdown.length - 1].cust_name || null
+        : null;
     };
     const getModel = (u) => {
       for (const b of breakdown) {
         if (u > b.start && u <= b.end) return b.model;
       }
-      return breakdown.length > 0 ? breakdown[breakdown.length - 1].model : null;
+      return breakdown.length > 0
+        ? breakdown[breakdown.length - 1].model
+        : null;
     };
 
     const now = new Date();
-    const customer   = getCustomer(Number(unit_no));
-    const unitModel  = getModel(Number(unit_no));
+    const customer = getCustomer(Number(unit_no));
+    const unitModel = getModel(Number(unit_no));
 
     await client.query("BEGIN");
 
-    // Insert atau update approval record — set status='approved'
     await client.query(
       `INSERT INTO public.target_scan_approvals (schedule_id, unit_no, remark, approved_by, approved_at, customer, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'approved')
@@ -1514,52 +1707,55 @@ router.patch("/:id/approve-single", async (req, res) => {
              approved_by = EXCLUDED.approved_by,
              approved_at = EXCLUDED.approved_at,
              status = 'approved'`,
-      [scheduleId, unit_no, remark || null, approved_by_id || null, now, customer]
+      [
+        scheduleId,
+        unit_no,
+        remark || null,
+        approved_by_id || null,
+        now,
+        customer,
+      ],
     );
 
-    // Hitung actual_input = hanya unit berstatus 'approved'
     const singleCountRes = await client.query(
       `SELECT COUNT(*) AS cnt FROM public.target_scan_approvals
        WHERE schedule_id = $1 AND COALESCE(status, 'approved') = 'approved'`,
-      [scheduleId]
+      [scheduleId],
     );
     const singleNewActual = Number(singleCountRes.rows[0].cnt);
     await client.query(
       `UPDATE public.production_schedules SET actual_input = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [singleNewActual, scheduleId]
+      [singleNewActual, scheduleId],
     );
 
-    // Resolve approvedByName inside transaction
     let approvedByName = null;
     if (approved_by_id) {
       const empRes = await client.query(
         `SELECT emp_name FROM public.employees WHERE id = $1 LIMIT 1`,
-        [approved_by_id]
+        [approved_by_id],
       );
       if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
     }
 
-    // Deduct stock_m101 + insert stock_movements record per part (1 unit)
     const partsRes = await client.query(
       `SELECT id, part_code, part_name, stock_m101, qty_per_assembly FROM kanban_master
-       WHERE is_active = true AND qty_per_assembly > 0`
+       WHERE is_active = true AND qty_per_assembly > 0`,
     );
 
-    // Get schedule code for reference
     const schedCodeRes = await client.query(
       `SELECT prod_schedule_code FROM public.production_schedules WHERE id = $1 LIMIT 1`,
-      [scheduleId]
+      [scheduleId],
     );
     const scheduleCode = schedCodeRes.rows[0]?.prod_schedule_code || null;
 
     for (const part of partsRes.rows) {
-      const deduct   = part.qty_per_assembly || 1;
+      const deduct = part.qty_per_assembly || 1;
       const newStock = Math.max(0, (part.stock_m101 || 0) - deduct);
       await client.query(
         `UPDATE kanban_master SET stock_m101 = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-        [newStock, part.id]
+        [newStock, part.id],
       );
-      // Insert 1 movement record per part untuk 1 unit
+
       await client.query(
         `INSERT INTO stock_movements (
            part_id, part_code, part_name, movement_type, stock_level,
@@ -1568,21 +1764,22 @@ router.patch("/:id/approve-single", async (req, res) => {
            moved_by, moved_by_name, moved_at
          ) VALUES ($1,$2,$3,'OUT','M101',$4,$5,$6,'finish_good',$7,$8,$9,$10,$11,CURRENT_TIMESTAMP)`,
         [
-          part.id, part.part_code, part.part_name,
+          part.id,
+          part.part_code,
+          part.part_name,
           deduct,
           part.stock_m101,
           newStock,
           scheduleCode,
           unitModel || null,
-          remark || '-',
+          remark || "-",
           approved_by_id || null,
           approvedByName || null,
-        ]
+        ],
       );
     }
 
     await client.query("COMMIT");
-
 
     return res.json({
       message: `Unit ${unit_no} berhasil di-approve`,
@@ -1599,8 +1796,6 @@ router.patch("/:id/approve-single", async (req, res) => {
   }
 });
 
-// ===== PATCH /:id/update-approval =====
-// Edit remark + update approved_by pada approval yang sudah ada
 router.patch("/:id/update-approval", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1617,18 +1812,20 @@ router.patch("/:id/update-approval", async (req, res) => {
              approved_at = $3
        WHERE schedule_id = $4 AND unit_no = $5
        RETURNING unit_no`,
-      [remark || null, approved_by_id || null, now, scheduleId, unit_no]
+      [remark || null, approved_by_id || null, now, scheduleId, unit_no],
     );
 
     if (result.rowCount === 0) {
-      return res.status(404).json({ message: "Approval record tidak ditemukan." });
+      return res
+        .status(404)
+        .json({ message: "Approval record tidak ditemukan." });
     }
 
     let approvedByName = null;
     if (approved_by_id) {
       const empRes = await client.query(
         `SELECT emp_name FROM public.employees WHERE id = $1 LIMIT 1`,
-        [approved_by_id]
+        [approved_by_id],
       );
       if (empRes.rows.length > 0) approvedByName = empRes.rows[0].emp_name;
     }
@@ -1645,6 +1842,5 @@ router.patch("/:id/update-approval", async (req, res) => {
     client.release();
   }
 });
-
 
 module.exports = router;
