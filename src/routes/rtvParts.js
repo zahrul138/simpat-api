@@ -484,9 +484,6 @@ router.post("/:id/complete", async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// PATCH /api/rtv-parts/:id/remark  →  Update remark (used in Received LOG)
-// ════════════════════════════════════════════════════════════════════════════
 router.patch("/:id/remark", async (req, res) => {
   try {
     const { id } = req.params;
