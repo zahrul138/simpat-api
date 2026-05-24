@@ -1,13 +1,12 @@
-// src/routes/vendors.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const authenticateToken = require("../middleware/auth"); 
+const authenticateToken = require("../middleware/auth");
 
 router.get("/", async (req, res) => {
   try {
     console.log("[GET /api/vendors] Fetching vendors...");
-    
+
     const query = `
       SELECT 
         id,
@@ -29,9 +28,9 @@ router.get("/", async (req, res) => {
     `;
 
     const { rows } = await pool.query(query);
-    
+
     console.log(`[GET /api/vendors] Found ${rows.length} vendors`);
-    
+
     res.json({
       success: true,
       data: rows,
@@ -39,24 +38,24 @@ router.get("/", async (req, res) => {
     });
   } catch (error) {
     console.error("[GET /api/vendors] Error:", error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Internal server error",
-      error: error.message 
+      error: error.message
     });
   }
 });
 
 router.post("/", async (req, res) => {
   const client = await pool.connect();
-  try { 
-    const { 
-      vendor_name, 
-      vendor_desc, 
-      vendor_type_id, 
+  try {
+    const {
+      vendor_name,
+      vendor_desc,
+      vendor_type_id,
       types,
-      vendor_country, 
-      vendor_city, 
+      vendor_country,
+      vendor_city,
       is_active = true,
       created_by
     } = req.body;
@@ -64,7 +63,6 @@ router.post("/", async (req, res) => {
     console.log("=== POST /api/vendors ===");
     console.log("Request body:", req.body);
 
-    // Validasi required fields
     if (!vendor_name || !vendor_desc || !vendor_type_id) {
       return res.status(400).json({
         success: false,
@@ -105,7 +103,7 @@ router.post("/", async (req, res) => {
 
     await client.query("COMMIT");
 
-    console.log("✅ Vendor created successfully:", rows[0]);
+    console.log("Vendor created successfully:", rows[0]);
 
     res.status(201).json({
       success: true,
@@ -115,8 +113,8 @@ router.post("/", async (req, res) => {
 
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("❌ POST /api/vendors Error:", error);
-    
+    console.error("POST /api/vendors Error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to create vendor",
@@ -127,20 +125,19 @@ router.post("/", async (req, res) => {
   }
 });
 
-// PUT /api/vendors/:id - Update vendor
 router.put("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { 
-      vendor_name, 
-      vendor_desc, 
-      vendor_type_id, 
+    const {
+      vendor_name,
+      vendor_desc,
+      vendor_type_id,
       types,
-      vendor_country, 
-      vendor_city, 
+      vendor_country,
+      vendor_city,
       is_active,
-      created_by // 🔥 OPSIONAL: jika perlu update created_by
+      created_by
     } = req.body;
 
     console.log(`[PUT /api/vendors/${id}] Request body:`, req.body);
@@ -157,7 +154,7 @@ router.put("/:id", async (req, res) => {
         vendor_country = COALESCE($5, vendor_country),
         vendor_city = COALESCE($6, vendor_city),
         is_active = COALESCE($7, is_active),
-        created_by = COALESCE($8, created_by), -- 🔥 TAMBAHKAN INI
+        created_by = COALESCE($8, created_by), 
         updated_at = CURRENT_TIMESTAMP
       WHERE id = $9
       RETURNING *
@@ -171,7 +168,7 @@ router.put("/:id", async (req, res) => {
       vendor_country,
       vendor_city,
       is_active,
-      created_by, // 🔥 TAMBAHKAN INI
+      created_by,
       id
     ]);
 
@@ -206,17 +203,15 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/vendors/:id - Hard delete vendor (PERMANEN)
 router.delete("/:id", async (req, res) => {
   const client = await pool.connect();
+  const { id } = req.params;
   try {
-    const { id } = req.params;
 
     console.log(`[DELETE /api/vendors/${id}] Hard deleting vendor`);
 
     await client.query("BEGIN");
 
-    // 🔥 PERUBAHAN: Gunakan DELETE bukan UPDATE
     const deleteQuery = `
       DELETE FROM vendor_detail 
       WHERE id = $1
@@ -246,12 +241,11 @@ router.delete("/:id", async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error(`[DELETE /api/vendors/${id}] Error:`, error);
-    
-    // Handle foreign key constraint error
+
     if (error.code === '23503') {
       return res.status(400).json({
         success: false,
-        message: "Cannot delete vendor. Vendor is still referenced in other tables.",
+        message: "Vendor is still have part detail.",
         error: "Foreign key constraint violation"
       });
     }
@@ -266,7 +260,6 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// PUT /api/vendors/:id/increment-parts
 router.put("/:id/increment-parts", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -289,7 +282,6 @@ router.put("/:id/increment-parts", async (req, res) => {
       });
     }
 
-    // Update vendor_types total_parts juga
     const vendorTypeUpdate = `
       UPDATE vendor_types 
       SET total_parts = COALESCE(total_parts, 0) + 1
@@ -315,22 +307,18 @@ router.put("/:id/increment-parts", async (req, res) => {
   }
 });
 
-// POST /api/vendors/reset-counters
 router.post("/reset-counters", async (req, res) => {
   const client = await pool.connect();
   try {
     console.log("[POST /api/vendors/reset-counters] Resetting counters...");
-    
-    await client.query("BEGIN");
 
-    // Reset semua total_parts ke 0
+    await client.query("BEGIN");
     await client.query(`
       UPDATE vendor_detail 
       SET total_parts = 0,
           updated_at = CURRENT_TIMESTAMP
     `);
 
-    // Hitung ulang dari kanban_master
     await client.query(`
       UPDATE vendor_detail vd
       SET total_parts = (

@@ -1,11 +1,8 @@
-// routes/activityLogs.js
 const express = require('express');
 const pool    = require('../db');
 const auth    = require('../middleware/auth');
-
 const router = express.Router();
 
-// GET /api/activity-logs
 router.get('/', auth(), async (req, res) => {
   const { action, emp_name, date_from, date_to, limit = 200 } = req.query;
   try {
@@ -34,8 +31,6 @@ router.get('/', auth(), async (req, res) => {
   }
 });
 
-// POST /api/activity-logs/logout — dipanggil dari frontend saat logout
-// Tidak pakai auth() karena token sudah dihapus sebelum request ini selesai
 router.post('/logout', async (req, res) => {
   const { empId, empName, description } = req.body || {};
   try {

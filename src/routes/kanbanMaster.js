@@ -55,6 +55,35 @@ router.get("/by-part-code", async (req, res) => {
   } 
 });
 
+router.get("/by-part-name", async (req, res) => {
+  try {
+    const { part_name } = req.query;
+
+    if (!part_name) {
+      return res.status(400).json({ message: "part_name is required" });
+    }
+
+    const query = `
+      SELECT id, part_code, part_name
+      FROM kanban_master
+      WHERE LOWER(part_name) = LOWER($1)
+        AND is_active = TRUE
+      LIMIT 1
+    `;
+
+    const { rows } = await pool.query(query, [part_name]);
+
+    if (!rows.length) {
+      return res.json({ item: null });
+    }
+
+    return res.json({ item: rows[0] });
+  } catch (err) {
+    console.error("Error /api/kanban-master/by-part-name:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -214,11 +243,11 @@ router.post("/", async (req, res) => {
     const { rows } = await client.query(insertQuery, values);
     const newPart = rows[0];
 
-    console.log("✅ Kanban master inserted:", newPart.id);
+    console.log("Kanban master inserted:", newPart.id);
 
     await client.query("COMMIT");
 
-    console.log("✅ Transaction completed without counter updates");
+    console.log("Transaction completed without counter updates");
 
     res.status(201).json({
       success: true,
@@ -227,7 +256,7 @@ router.post("/", async (req, res) => {
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("❌ POST /api/kanban-master Error:", error);
+    console.error("POST /api/kanban-master Error:", error);
 
     if (error.code === "23505") {
       return res.status(400).json({
@@ -341,7 +370,7 @@ router.get("/with-details", async (req, res) => {
       total: rows.length,
     });
   } catch (error) {
-    console.error("❌ GET /api/kanban-master/with-details Error:", error);
+    console.error("GET /api/kanban-master/with-details Error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch kanban master with details",
@@ -424,12 +453,12 @@ router.delete("/:id", async (req, res) => {
     const { rows } = await client.query(deleteQuery, [id]);
     const deletedPart = rows[0];
 
-    console.log("✅ Part deleted:", deletedPart.part_code);
+    console.log("Part deleted:", deletedPart.part_code);
 
     await client.query("COMMIT");
 
     console.log(
-      "✅ Part deleted successfully. Counters updated via database triggers."
+      "Part deleted successfully. Counters updated via database triggers."
     );
 
     res.json({
@@ -439,7 +468,7 @@ router.delete("/:id", async (req, res) => {
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("❌ DELETE /api/kanban-master/:id Error:", error);
+    console.error("DELETE /api/kanban-master/:id Error:", error);
 
     res.status(500).json({
       success: false,
@@ -569,11 +598,11 @@ router.put("/:id", async (req, res) => {
     const { rows } = await client.query(updateQuery, values);
     const updatedPart = rows[0];
 
-    console.log("✅ Part updated:", updatedPart.part_code);
+    console.log("Part updated:", updatedPart.part_code);
 
     await client.query("COMMIT");
 
-    console.log("✅ All counters updated for part update");
+    console.log("All counters updated for part update");
 
     res.json({
       success: true,
@@ -582,7 +611,7 @@ router.put("/:id", async (req, res) => {
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("❌ PUT /api/kanban-master/:id Error:", error);
+    console.error("PUT /api/kanban-master/:id Error:", error);
 
     if (error.code === "23505") {
       return res.status(400).json({
@@ -630,7 +659,7 @@ router.get("/qty-per-box", async (req, res) => {
         AND km.is_active = TRUE
       ORDER BY km.id DESC
       LIMIT 1
-    `;  // Hapus titik koma di akhir query jika ada
+    `;  
 
     const { rows } = await pool.query(query, [part_code]);
 

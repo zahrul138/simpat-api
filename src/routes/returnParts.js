@@ -140,7 +140,6 @@ router.post("/", async (req, res) => {
   try {
     const { parts } = req.body;
 
-    // ── Validasi input ──
     if (!Array.isArray(parts) || parts.length === 0) {
       return res.status(400).json({
         success: false,

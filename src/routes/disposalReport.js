@@ -1,4 +1,3 @@
-// routes/disposalReport.js
 const express = require("express");
 const router  = express.Router();
 const pool    = require("../db");
@@ -14,18 +13,13 @@ const monthToRange = (month) => {
   };
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-// GET /api/disposal-report/summary
-// Sumber sama dengan chart: return_parts / rtv_parts filter by month
-// qty_return × kanban_master.part_price — konsisten dengan chart & history
-// ════════════════════════════════════════════════════════════════════════════
 router.get("/summary", async (req, res) => {
   try {
     const { month, vendor_id, type } = req.query;
 
     const range = monthToRange(month);
     if (!range) {
-      return res.status(400).json({ success: false, message: "Parameter month wajib diisi (format YYYY-MM)" });
+      return res.status(400).json({ success: false, message: "Parameter month field is required! (format YYYY-MM)" });
     }
 
     const vendorClause = vendor_id ? `AND km.vendor_id = $3` : "";
@@ -73,21 +67,17 @@ router.get("/summary", async (req, res) => {
     });
   } catch (error) {
     console.error("[GET /api/disposal-report/summary] Error:", error);
-    res.status(500).json({ success: false, message: "Gagal mengambil summary", error: error.message });
+    res.status(500).json({ success: false, message: "Failde to fetch summary", error: error.message });
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// GET /api/disposal-report/chart
-// Filter by month dari return_parts / rtv_parts (ada dimensi waktu)
-// ════════════════════════════════════════════════════════════════════════════
 router.get("/chart", async (req, res) => {
   try {
     const { month, vendor_id, type } = req.query;
 
     const range = monthToRange(month);
     if (!range) {
-      return res.status(400).json({ success: false, message: "Parameter month wajib diisi (format YYYY-MM)" });
+      return res.status(400).json({ success: false, message: "Parameter month field is required! (format YYYY-MM)" });
     }
 
     const vendorClauseScrap = vendor_id ? `AND km.vendor_id = $3` : "";
@@ -147,19 +137,17 @@ router.get("/chart", async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     console.error("[GET /api/disposal-report/chart] Error:", error);
-    res.status(500).json({ success: false, message: "Gagal mengambil data chart", error: error.message });
+    res.status(500).json({ success: false, message: "Failde to fetch chart data", error: error.message });
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// GET /api/disposal-report/daily-detail
-// ════════════════════════════════════════════════════════════════════════════
+
 router.get("/daily-detail", async (req, res) => {
   try {
     const { date, vendor_id, type } = req.query;
 
     if (!date) {
-      return res.status(400).json({ success: false, message: "Parameter date wajib diisi" });
+      return res.status(400).json({ success: false, message: "Parameter date field is required!" });
     }
 
     const vendorClauseScrap = vendor_id ? `AND km.vendor_id = $2` : "";
@@ -222,20 +210,17 @@ router.get("/daily-detail", async (req, res) => {
     res.json({ success: true, data: records });
   } catch (error) {
     console.error("[GET /api/disposal-report/daily-detail] Error:", error);
-    res.status(500).json({ success: false, message: "Gagal mengambil detail harian", error: error.message });
+    res.status(500).json({ success: false, message: "Failed to fetch daily detail", error: error.message });
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// GET /api/disposal-report/history
-// ════════════════════════════════════════════════════════════════════════════
 router.get("/history", async (req, res) => {
   try {
     const { disposal_type, month, vendor_id, limit = 10, offset = 0, search, part_code, part_name, vendor, actioned_by } = req.query;
 
     const range = monthToRange(month);
     if (!range) {
-      return res.status(400).json({ success: false, message: "Parameter month wajib diisi (format YYYY-MM)" });
+      return res.status(400).json({ success: false, message: "Parameter month field is required! (format YYYY-MM)" });
     }
 
     const lim = parseInt(limit);
@@ -341,7 +326,7 @@ router.get("/history", async (req, res) => {
       return res.json({ success: true, data: rows, pagination: { total, limit: lim, offset: off } });
     }
 
-    res.status(400).json({ success: false, message: "disposal_type harus 'scrap' atau 'rtv'" });
+    res.status(400).json({ success: false, message: "disposal_type must be 'scrap' or 'rtv'" });
   } catch (error) {
     console.error("[GET /api/disposal-report/history] Error:", error);
     res.status(500).json({ success: false, message: "Gagal mengambil history", error: error.message });

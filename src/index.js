@@ -30,6 +30,7 @@ const disposalReport       = require("./routes/disposalReport");
 const activityLogsRouter   = require('./routes/activityLogs');
 const adminDashboardRouter = require('./routes/adminDashboard');
 const formatScheduleDates = require("./middleware/dateFormatter");
+const vendorTypesRouter = require("./routes/vendorTypes");
 const { router: arrivedSchedulerRouter, startArrivedScheduler } = require("./routes/arrivedScheduler");
 
 const app = express();
@@ -82,6 +83,7 @@ app.use('/user-feedbacks', userFeedbacksRouter);
 app.use("/api/disposal-report",  disposalReport);
 app.use("/api/activity-logs",    activityLogsRouter);
 app.use("/api/admin-dashboard",  adminDashboardRouter);
+app.use("/api/vendor-types", vendorTypesRouter);
 app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
             
 app.use((req, res) => {

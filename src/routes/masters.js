@@ -1,13 +1,9 @@
-// src/routes/masters.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-// ================== MODELS ==================
-// GET /api/masters/models
 router.get("/models", async (_req, res) => {
   try {
-    // Ambil dari production_schedules atau table lain yang ada model
     const q = await pool.query(
       `SELECT DISTINCT model_name as name 
        FROM customers 
@@ -39,8 +35,6 @@ router.get("/models", async (_req, res) => {
   }
 });
 
-// ================== PART SIZES ==================
-// GET /api/masters/part-sizes
 router.get("/part-sizes", async (_req, res) => {
   try {
     const q = await pool.query(
@@ -69,7 +63,6 @@ router.get("/part-sizes", async (_req, res) => {
   }
 });
 
-// POST /api/masters/part-sizes
 router.post("/part-sizes", async (req, res) => {
   try {
     const { size_name, description, created_by } = req.body;
@@ -115,13 +108,10 @@ router.post("/part-sizes", async (req, res) => {
   }
 });
 
-// PUT /api/masters/part-sizes/:id
 router.put("/part-sizes/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { size_name, description } = req.body;
-
-    // Validasi input
     if (!size_name) {
       return res.status(400).json({
         success: false,
@@ -160,7 +150,6 @@ router.put("/part-sizes/:id", async (req, res) => {
     console.error("[PUT /api/masters/part-sizes/:id] error:", error);
 
     if (error.code === "23505") {
-      // Unique violation
       return res.status(400).json({
         success: false,
         message: "Part size with this name already exists",
@@ -174,7 +163,6 @@ router.put("/part-sizes/:id", async (req, res) => {
   }
 });
 
-// PUT /api/masters/part-sizes/:id/deactivate
 router.put("/part-sizes/:id/deactivate", async (req, res) => {
   try {
     const { id } = req.params;
@@ -210,13 +198,11 @@ router.put("/part-sizes/:id/deactivate", async (req, res) => {
   }
 });
 
-// PUT /api/masters/part-sizes/:id/assign-part
 router.put("/part-sizes/:id/assign-part", async (req, res) => {
   try {
     const { id } = req.params;
     const { part_id, kanban_id, part_code, part_name, created_by } = req.body;
 
-    // Validasi input
     if (!part_id || !kanban_id || !part_code) {
       return res.status(400).json({
         success: false,
@@ -266,7 +252,6 @@ router.put("/part-sizes/:id/assign-part", async (req, res) => {
   }
 });
 
-// PUT /api/masters/part-sizes/:id/remove-part
 router.put("/part-sizes/:id/remove-part", async (req, res) => {
   try {
     const { id } = req.params;
@@ -305,7 +290,6 @@ router.put("/part-sizes/:id/remove-part", async (req, res) => {
   }
 });
 
-// GET /api/masters/part-sizes-with-parts
 router.get("/part-sizes-with-parts", async (_req, res) => {
   try {
     const q = await pool.query(
@@ -341,12 +325,10 @@ router.get("/part-sizes-with-parts", async (_req, res) => {
   }
 });
 
-// ================== PART SIZES WITH KANBAN INFO ==================
-// GET /api/masters/part-sizes-with-kanban - PERBAIKAN
 router.get("/part-sizes-with-kanban", async (_req, res) => {
   try {
     const q = await pool.query(
-      `SELECT DISTINCT ON (ps.id) -- TAMBAHKAN DISTINCT UNTUK HINDARI DUPLIKAT
+      `SELECT DISTINCT ON (ps.id) 
          ps.id,
          ps.size_name,
          ps.description,
@@ -379,7 +361,6 @@ router.get("/part-sizes-with-kanban", async (_req, res) => {
   }
 });
 
-// PUT /api/masters/part-sizes/:id/increment-parts
 router.put("/part-sizes/:id/increment-parts", async (req, res) => {
   try {
     const { id } = req.params;
@@ -418,7 +399,6 @@ router.put("/part-sizes/:id/increment-parts", async (req, res) => {
   }
 });
 
-// PUT /api/masters/part-sizes/:id/decrement-parts
 router.put("/part-sizes/:id/decrement-parts", async (req, res) => {
   try {
     const { id } = req.params;
@@ -457,13 +437,10 @@ router.put("/part-sizes/:id/decrement-parts", async (req, res) => {
   }
 });
 
-// PUT /api/masters/part-sizes/:id/link-kanban
 router.put("/part-sizes/:id/link-kanban", async (req, res) => {
   try {
     const { id } = req.params;
     const { kanban_master_id, part_code } = req.body;
-
-    // Validasi input
     if (!kanban_master_id || !part_code) {
       return res.status(400).json({
         success: false,
@@ -507,11 +484,8 @@ router.put("/part-sizes/:id/link-kanban", async (req, res) => {
   }
 });
 
-// ================== STOCK LEVELS ==================
-// GET /api/masters/stock-levels
 router.get("/stock-levels", async (_req, res) => {
   try {
-    // Ambil dari table yang relevan, atau return default
     const q = await pool.query(
       `SELECT DISTINCT stock_level as name 
        FROM local_schedules 
@@ -539,8 +513,6 @@ router.get("/stock-levels", async (_req, res) => {
   }
 });
 
-// ================== TRIPS & VENDORS ==================
-// GET /api/masters/trips
 router.get("/trips", async (_req, res) => {
   try {
     const q = await pool.query(
@@ -563,7 +535,6 @@ router.get("/trips", async (_req, res) => {
   }
 });
 
-// GET /api/masters/vendors
 router.get("/vendors", async (_req, res) => {
   try {
     const q = await pool.query(
@@ -591,11 +562,8 @@ router.get("/vendors", async (_req, res) => {
   }
 });
 
-// ================== HEALTH CHECK ==================
-// GET /api/masters/health
 router.get("/health", async (_req, res) => {
   try {
-    // Test database connection
     await pool.query("SELECT 1");
 
     res.json({
@@ -613,8 +581,6 @@ router.get("/health", async (_req, res) => {
   }
 });
 
-// ================== STATISTICS ==================
-// GET /api/masters/statistics
 router.get("/statistics", async (_req, res) => {
   try {
     const [partSizesCount, vendorsCount, tripsCount] = await Promise.all([

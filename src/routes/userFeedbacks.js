@@ -69,10 +69,15 @@ router.post("/", auth(), async (req, res) => {
     } = req.body || {};
 
     if (!emp_id || !emp_name) {
-      return res
-        .status(400)
-        .json({ error: "emp_id and emp_name are required" });
+      return res.status(400).json({ error: "emp_id and emp_name are required" });
     }
+    if (!description || !String(description).trim()) {
+      return res.status(400).json({ error: "Description field is required" });
+    }
+    if (!problem_location || !String(problem_location).trim()) {
+      return res.status(400).json({ error: "Problem location is required" });
+    }
+
 
     const [p1, p2, p3, p4] = [
       photos[0] || null,

@@ -1,11 +1,7 @@
-// routes/warningSettings.js
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 
-// ─────────────────────────────────────────────────────────────
-// GET /api/warning-settings
-// ─────────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -25,9 +21,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────
-// PUT /api/warning-settings/bulk  ← HARUS sebelum /:id
-// ─────────────────────────────────────────────────────────────
 router.put('/bulk', async (req, res) => {
   const { settings } = req.body;
 
@@ -78,9 +71,6 @@ router.put('/bulk', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────
-// GET /api/warning-settings/:id
-// ─────────────────────────────────────────────────────────────
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -105,9 +95,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────
-// POST /api/warning-settings
-// ─────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
     const { start, end, reason, enabled = true } = req.body;
@@ -134,9 +121,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────
-// PATCH /api/warning-settings/:id
-// ─────────────────────────────────────────────────────────────
 router.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -180,9 +164,6 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────
-// DELETE /api/warning-settings/:id
-// ─────────────────────────────────────────────────────────────
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;

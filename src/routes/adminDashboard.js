@@ -1,12 +1,9 @@
-// routes/adminDashboard.js
 const express = require('express');
-const pool    = require('../db');
-const auth    = require('../middleware/auth');
+const pool = require('../db');
+const auth = require('../middleware/auth');
 const { getOnlineByDept, getOnlineUsers } = require('./activeSessions');
-
 const router = express.Router();
 
-// GET /api/admin-dashboard/stats
 router.get('/stats', auth(), async (req, res) => {
   try {
     const [userStats, feedbackStats, recentActivity, recentFeedback] =
@@ -24,7 +21,7 @@ router.get('/stats', auth(), async (req, res) => {
 
         pool.query(`
           SELECT
-            COUNT(*)                                        AS total,
+            COUNT(*)                                       AS total,
             COUNT(*) FILTER (WHERE status = 'New')         AS new_count,
             COUNT(*) FILTER (WHERE status = 'In Progress') AS in_progress,
             COUNT(*) FILTER (WHERE status = 'Complete')    AS complete
@@ -50,20 +47,20 @@ router.get('/stats', auth(), async (req, res) => {
     res.json({
       success: true,
       users: {
-        total:      parseInt(u.total),
-        active:     parseInt(u.active),
-        inactive:   parseInt(u.inactive),
+        total: parseInt(u.total),
+        active: parseInt(u.active),
+        inactive: parseInt(u.inactive),
         adminCount: parseInt(u.admin_count),
-        userCount:  parseInt(u.user_count),
+        userCount: parseInt(u.user_count),
       },
       feedback: {
-        total:      parseInt(f.total),
-        newCount:   parseInt(f.new_count),
+        total: parseInt(f.total),
+        newCount: parseInt(f.new_count),
         inProgress: parseInt(f.in_progress),
-        complete:   parseInt(f.complete),
+        complete: parseInt(f.complete),
       },
-      onlineByDept:   getOnlineByDept(),
-      onlineUsers:    getOnlineUsers(),  
+      onlineByDept: getOnlineByDept(),
+      onlineUsers: getOnlineUsers(),
       recentActivity: recentActivity.rows,
       recentFeedback: recentFeedback.rows,
     });

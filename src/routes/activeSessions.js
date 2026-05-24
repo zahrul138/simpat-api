@@ -1,7 +1,6 @@
 const express = require("express");
 const pool    = require("../db");
 const router  = express.Router();
-
 const activeSessions = new Map();
 const TIMEOUT_NORMAL  = 24 * 60 * 60 * 1000; 
 const TIMEOUT_CLOSING = 10 * 1000;            
@@ -52,7 +51,6 @@ router.post("/heartbeat", async (req, res) => {
   if (!userId) return res.status(400).json({ success: false, message: "userId required" });
 
   try {
-    // Ambil data dari DB
     const { rows } = await pool.query(
       `SELECT e.emp_name, d.dept_code
        FROM employees e

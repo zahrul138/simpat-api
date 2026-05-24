@@ -2,9 +2,6 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
-
-
-
 const PALLET_CONFIG = {
   large: {
     length: 110,
@@ -22,7 +19,6 @@ const PALLET_CONFIG = {
   },
 };
 
-
 const canBoxFitPallet = (boxLength, boxWidth, palletLength, palletWidth) => {
   return (
     (boxLength <= palletLength && boxWidth <= palletWidth) ||
@@ -30,27 +26,17 @@ const canBoxFitPallet = (boxLength, boxWidth, palletLength, palletWidth) => {
   );
 };
 
-
 const calculateMaxBoxesInPallet = (box, palletType) => {
   const config = PALLET_CONFIG[palletType];
   const availableHeight = config.maxHeight - config.baseHeight;
-
-
   let bestBoxesPerLayer = 0;
-
-
   const boxesLengthwiseNormal = Math.floor(config.length / box.length);
   const boxesWidthwiseNormal = Math.floor(config.width / box.width);
   const boxesPerLayerNormal = boxesLengthwiseNormal * boxesWidthwiseNormal;
-
-
   const boxesLengthwiseRotated = Math.floor(config.length / box.width);
   const boxesWidthwiseRotated = Math.floor(config.width / box.length);
   const boxesPerLayerRotated = boxesLengthwiseRotated * boxesWidthwiseRotated;
-
-
   bestBoxesPerLayer = Math.max(boxesPerLayerNormal, boxesPerLayerRotated);
-
 
   if (palletType === "large" && bestBoxesPerLayer < 4) {
     const boxesMixed = boxesPerLayerNormal + boxesPerLayerRotated;
@@ -58,33 +44,24 @@ const calculateMaxBoxesInPallet = (box, palletType) => {
   }
 
   if (bestBoxesPerLayer === 0) return { maxBoxesPerPallet: 0 };
-
-
   const maxLayersByHeight = Math.floor(availableHeight / box.height);
   const safeLayersByHeight = Math.max(1, maxLayersByHeight - 1);
-
-
   const weightPerLayer = bestBoxesPerLayer * box.weight;
-
-
-  const maxLayersByWeight = weightPerLayer > 0
-    ? Math.floor(config.maxWeight / weightPerLayer)
-    : safeLayersByHeight;
-
-
-  const finalLayers = Math.max(1, Math.min(safeLayersByHeight, maxLayersByWeight));
-
-
+  const maxLayersByWeight =
+    weightPerLayer > 0
+      ? Math.floor(config.maxWeight / weightPerLayer)
+      : safeLayersByHeight;
+  const finalLayers = Math.max(
+    1,
+    Math.min(safeLayersByHeight, maxLayersByWeight),
+  );
   const maxBoxesByDimension = bestBoxesPerLayer * finalLayers;
-
-
-  const maxBoxesByWeight = box.weight > 0
-    ? Math.floor(config.maxWeight / box.weight)
-    : maxBoxesByDimension;
-
+  const maxBoxesByWeight =
+    box.weight > 0
+      ? Math.floor(config.maxWeight / box.weight)
+      : maxBoxesByDimension;
 
   const maxBoxesPerPallet = Math.min(maxBoxesByDimension, maxBoxesByWeight);
-
   return {
     maxBoxesPerPallet: Math.max(1, maxBoxesPerPallet),
     boxesPerLayer: bestBoxesPerLayer,
@@ -92,47 +69,35 @@ const calculateMaxBoxesInPallet = (box, palletType) => {
   };
 };
 
-
 const optimizePalletMixing = (palletDetails) => {
   if (palletDetails.length <= 1) return palletDetails;
 
   const optimized = [...palletDetails];
-
 
   for (let i = 0; i < optimized.length; i++) {
     for (let j = i + 1; j < optimized.length; j++) {
       const palletA = optimized[i];
       const palletB = optimized[j];
 
-
       if (palletA.palletType !== palletB.palletType) continue;
-
       const maxWeight = palletA.palletType === "large" ? 150 : 60;
       const combinedWeight = palletA.totalWeight + palletB.totalWeight;
       const combinedBoxes = palletA.boxesCount + palletB.boxesCount;
 
-
       if (combinedWeight <= maxWeight && combinedBoxes <= palletA.capacity) {
-
         palletA.boxesCount = combinedBoxes;
         palletA.totalWeight = combinedWeight;
-
-
         optimized.splice(j, 1);
         j--;
       }
     }
   }
-
   return optimized;
 };
 
-
 const getBoxDimensionsFromDB = async (client, partCode) => {
   const defaultDimensions = { length: 30, width: 30, height: 30, weight: 0.5 };
-
   try {
-
     const result = await client.query(
       `SELECT 
         km.part_code,
@@ -147,19 +112,17 @@ const getBoxDimensionsFromDB = async (client, partCode) => {
          AND km.is_active = TRUE
        ORDER BY km.id DESC
        LIMIT 1`,
-      [partCode]
+      [partCode],
     );
 
     if (result.rowCount > 0) {
       const row = result.rows[0];
-
-
       let partWeight = parseFloat(row.part_weight) || 0;
-      if (row.weight_unit === 'g') {
+      if (row.weight_unit === "g") {
         partWeight = partWeight / 1000;
-      } else if (row.weight_unit === 'lbs') {
+      } else if (row.weight_unit === "lbs") {
         partWeight = partWeight * 0.453592;
-      } else if (row.weight_unit === 'oz') {
+      } else if (row.weight_unit === "oz") {
         partWeight = partWeight * 0.0283495;
       }
 
@@ -173,20 +136,19 @@ const getBoxDimensionsFromDB = async (client, partCode) => {
 
     return defaultDimensions;
   } catch (error) {
-    console.warn(`[getBoxDimensionsFromDB] Error for ${partCode}:`, error.message);
+    console.warn(
+      `[getBoxDimensionsFromDB] Error for ${partCode}:`,
+      error.message,
+    );
     return defaultDimensions;
   }
 };
-
 
 const calculateOptimizedPallet = (boxData) => {
   if (!boxData || boxData.length === 0) {
     return { largePallets: 0, smallPallets: 0, totalPallets: 0 };
   }
-
-
   const boxGroups = {};
-
   boxData.forEach((box) => {
     const boxKey = `${box.length}x${box.width}x${box.height}`;
 
@@ -199,14 +161,11 @@ const calculateOptimizedPallet = (boxData) => {
         totalWeight: 0,
       };
     }
-
     boxGroups[boxKey].totalBoxes += 1;
     boxGroups[boxKey].totalWeight += box.weight;
   });
 
   const palletDetails = [];
-
-
   const sortedKeys = Object.keys(boxGroups).sort();
 
   for (const key of sortedKeys) {
@@ -214,8 +173,6 @@ const calculateOptimizedPallet = (boxData) => {
     if (group.totalBoxes <= 0) continue;
 
     const weightPerBox = group.totalWeight / group.totalBoxes;
-
-
     const fitsLarge = canBoxFitPallet(group.length, group.width, 110, 110);
     const fitsSmall = canBoxFitPallet(group.length, group.width, 96, 76);
 
@@ -224,7 +181,6 @@ const calculateOptimizedPallet = (boxData) => {
       palletType = "small";
     }
 
-
     const capacity = calculateMaxBoxesInPallet(
       {
         length: group.length,
@@ -232,20 +188,21 @@ const calculateOptimizedPallet = (boxData) => {
         height: group.height,
         weight: weightPerBox,
       },
-      palletType
+      palletType,
     );
 
     if (capacity.maxBoxesPerPallet === 0) continue;
 
-
-    const palletsNeeded = Math.ceil(group.totalBoxes / capacity.maxBoxesPerPallet);
-
-
+    const palletsNeeded = Math.ceil(
+      group.totalBoxes / capacity.maxBoxesPerPallet,
+    );
     let remainingBoxes = group.totalBoxes;
     for (let i = 0; i < palletsNeeded; i++) {
-      const boxesInThisPallet = Math.min(remainingBoxes, capacity.maxBoxesPerPallet);
+      const boxesInThisPallet = Math.min(
+        remainingBoxes,
+        capacity.maxBoxesPerPallet,
+      );
       const weightInThisPallet = boxesInThisPallet * weightPerBox;
-
       palletDetails.push({
         palletType,
         boxesCount: boxesInThisPallet,
@@ -258,10 +215,7 @@ const calculateOptimizedPallet = (boxData) => {
     }
   }
 
-
   const optimizedPallets = optimizePalletMixing(palletDetails);
-
-
   let largePallets = 0;
   let smallPallets = 0;
 
@@ -280,30 +234,23 @@ const calculateOptimizedPallet = (boxData) => {
   };
 };
 
-
 const calculateVendorTotalPallet = async (client, vendorId) => {
   try {
-
     const partsResult = await client.query(
       `SELECT part_code, quantity_box FROM oversea_schedule_parts 
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     if (partsResult.rowCount === 0) {
       return 0;
     }
 
-
     const boxData = [];
-
     for (const part of partsResult.rows) {
       const qtyBox = parseInt(part.quantity_box) || 0;
       if (qtyBox <= 0) continue;
-
       const dimensions = await getBoxDimensionsFromDB(client, part.part_code);
-
-
       for (let i = 0; i < qtyBox; i++) {
         boxData.push({
           length: dimensions.length,
@@ -319,48 +266,50 @@ const calculateVendorTotalPallet = async (client, vendorId) => {
       return 0;
     }
 
-
     const result = calculateOptimizedPallet(boxData);
-
-    console.log(`[calculateVendorTotalPallet] Vendor ${vendorId}: ${boxData.length} boxes -> ${result.totalPallets} pallets`);
+    console.log(
+      `[calculateVendorTotalPallet] Vendor ${vendorId}: ${boxData.length} boxes -> ${result.totalPallets} pallets`,
+    );
 
     return result.totalPallets;
   } catch (error) {
-    console.error(`[calculateVendorTotalPallet] Error for vendor ${vendorId}:`, error.message);
+    console.error(
+      `[calculateVendorTotalPallet] Error for vendor ${vendorId}:`,
+      error.message,
+    );
 
     return 0;
   }
 };
 
-
-
-
 const updateVendorTotals = async (client, vendorId) => {
   try {
-
     const itemResult = await client.query(
       `SELECT COUNT(*) as total_item FROM oversea_schedule_parts 
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
     const totalItem = parseInt(itemResult.rows[0].total_item) || 0;
 
-
     const totalPallet = await calculateVendorTotalPallet(client, vendorId);
-
 
     await client.query(
       `UPDATE oversea_schedule_vendors 
        SET total_item = $1, total_pallet = $2, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $3`,
-      [totalItem, totalPallet, vendorId]
+      [totalItem, totalPallet, vendorId],
     );
 
-    console.log(`[updateVendorTotals] Vendor ${vendorId}: item=${totalItem}, pallet=${totalPallet}`);
+    console.log(
+      `[updateVendorTotals] Vendor ${vendorId}: item=${totalItem}, pallet=${totalPallet}`,
+    );
 
     return { totalItem, totalPallet };
   } catch (error) {
-    console.error(`[updateVendorTotals] Error for vendor ${vendorId}:`, error.message);
+    console.error(
+      `[updateVendorTotals] Error for vendor ${vendorId}:`,
+      error.message,
+    );
 
     try {
       await client.query(
@@ -375,20 +324,23 @@ const updateVendorTotals = async (client, vendorId) => {
          ),
          updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1`,
-        [vendorId]
+        [vendorId],
       );
-      console.log(`[updateVendorTotals] Vendor ${vendorId}: used fallback calculation`);
+      console.log(
+        `[updateVendorTotals] Vendor ${vendorId}: used fallback calculation`,
+      );
     } catch (fallbackError) {
-      console.error(`[updateVendorTotals] Fallback also failed for vendor ${vendorId}:`, fallbackError.message);
+      console.error(
+        `[updateVendorTotals] Fallback also failed for vendor ${vendorId}:`,
+        fallbackError.message,
+      );
     }
     return { totalItem: 0, totalPallet: 0 };
   }
 };
 
-
 const updateScheduleTotals = async (client, scheduleId) => {
   try {
-
     const result = await client.query(
       `UPDATE oversea_schedules
        SET total_item = (
@@ -402,40 +354,53 @@ const updateScheduleTotals = async (client, scheduleId) => {
        updated_at = CURRENT_TIMESTAMP
        WHERE id = $1
        RETURNING total_item, total_pallet`,
-      [scheduleId]
+      [scheduleId],
     );
 
     if (result.rowCount > 0) {
-      console.log(`[updateScheduleTotals] Schedule ${scheduleId}: item=${result.rows[0].total_item}, pallet=${result.rows[0].total_pallet}`);
-      return { totalItem: result.rows[0].total_item, totalPallet: result.rows[0].total_pallet };
+      console.log(
+        `[updateScheduleTotals] Schedule ${scheduleId}: item=${result.rows[0].total_item}, pallet=${result.rows[0].total_pallet}`,
+      );
+      return {
+        totalItem: result.rows[0].total_item,
+        totalPallet: result.rows[0].total_pallet,
+      };
     }
     return { totalItem: 0, totalPallet: 0 };
   } catch (error) {
-    console.error(`[updateScheduleTotals] Error for schedule ${scheduleId}:`, error.message);
+    console.error(
+      `[updateScheduleTotals] Error for schedule ${scheduleId}:`,
+      error.message,
+    );
     return { totalItem: 0, totalPallet: 0 };
   }
 };
 
-const createQCChecksForPassDates = async (client, vendorId, vendorName, createdByName) => {
+const createQCChecksForPassDates = async (
+  client,
+  vendorId,
+  vendorName,
+  createdByName,
+) => {
   try {
-    console.log(`[createQCChecksForPassDates] Creating QC checks for vendor ${vendorId}`);
-
+    console.log(
+      `[createQCChecksForPassDates] Creating QC checks for vendor ${vendorId}`,
+    );
 
     const partsResult = await client.query(
       `SELECT id, part_code, part_name, prod_dates 
        FROM oversea_schedule_parts 
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     const qcChecksCreated = [];
 
     for (const part of partsResult.rows) {
-
       let prodDates = [];
 
       if (part.prod_dates) {
-        if (typeof part.prod_dates === 'string') {
+        if (typeof part.prod_dates === "string") {
           try {
             prodDates = JSON.parse(part.prod_dates);
           } catch {
@@ -448,14 +413,13 @@ const createQCChecksForPassDates = async (client, vendorId, vendorName, createdB
         }
       }
 
-
       for (const prodDate of prodDates) {
-        const prodDateStr = String(prodDate || '').toUpperCase();
+        const prodDateStr = String(prodDate || "").toUpperCase();
 
-
-        if (prodDateStr.includes('SAMPLE') || prodDateStr === 'SAMPLE') {
-          console.log(`[createQCChecksForPassDates] Creating QC check for ${part.part_code} - ${prodDate}`);
-
+        if (prodDateStr.includes("SAMPLE") || prodDateStr === "SAMPLE") {
+          console.log(
+            `[createQCChecksForPassDates] Creating QC check for ${part.part_code} - ${prodDate}`,
+          );
 
           const existingCheck = await client.query(
             `SELECT id FROM qc_checks 
@@ -465,11 +429,10 @@ const createQCChecksForPassDates = async (client, vendorId, vendorName, createdB
                AND source_vendor_id = $3
                AND is_active = true 
              LIMIT 1`,
-            [part.part_code, String(prodDate), vendorId]
+            [part.part_code, String(prodDate), vendorId],
           );
 
           if (existingCheck.rowCount === 0) {
-
             const insertResult = await client.query(
               `INSERT INTO qc_checks (
                 part_code, 
@@ -492,26 +455,28 @@ const createQCChecksForPassDates = async (client, vendorId, vendorName, createdB
                 part.part_name,
                 vendorName,
                 String(prodDate),
-                'M136',
-                'M136 Part',
+                "M136",
+                "M136 Part",
                 null,
                 vendorId,
                 part.id,
-                createdByName
-              ]
+                createdByName,
+              ],
             );
 
             qcChecksCreated.push({
               qc_check_id: insertResult.rows[0].id,
               part_code: part.part_code,
-              prod_date: prodDate
+              prod_date: prodDate,
             });
           }
         }
       }
     }
 
-    console.log(`[createQCChecksForPassDates] Created ${qcChecksCreated.length} QC checks`);
+    console.log(
+      `[createQCChecksForPassDates] Created ${qcChecksCreated.length} QC checks`,
+    );
     return qcChecksCreated;
   } catch (error) {
     console.error(`[createQCChecksForPassDates] Error:`, error.message);
@@ -519,11 +484,11 @@ const createQCChecksForPassDates = async (client, vendorId, vendorName, createdB
   }
 };
 
-
 const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
   try {
-    console.log(`[checkAndMoveVendorToPassIfAllApproved] Checking vendor ${vendorId}`);
-
+    console.log(
+      `[checkAndMoveVendorToPassIfAllApproved] Checking vendor ${vendorId}`,
+    );
 
     const totalChecksResult = await client.query(
       `SELECT COUNT(*) as total 
@@ -531,16 +496,17 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
        WHERE source_vendor_id = $1 
          AND data_from = 'M136' 
          AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     const totalChecks = parseInt(totalChecksResult.rows[0].total) || 0;
 
     if (totalChecks === 0) {
-      console.log(`[checkAndMoveVendorToPassIfAllApproved] No QC checks found for vendor ${vendorId}`);
+      console.log(
+        `[checkAndMoveVendorToPassIfAllApproved] No QC checks found for vendor ${vendorId}`,
+      );
       return false;
     }
-
 
     const approvedChecksResult = await client.query(
       `SELECT COUNT(*) as approved 
@@ -549,41 +515,42 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
          AND data_from = 'M136' 
          AND status = 'Complete'
          AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     const approvedChecks = parseInt(approvedChecksResult.rows[0].approved) || 0;
 
-    console.log(`[checkAndMoveVendorToPassIfAllApproved] Vendor ${vendorId}: ${approvedChecks}/${totalChecks} approved`);
-
+    console.log(
+      `[checkAndMoveVendorToPassIfAllApproved] Vendor ${vendorId}: ${approvedChecks}/${totalChecks} approved`,
+    );
 
     if (totalChecks > 0 && approvedChecks === totalChecks) {
-      console.log(`[checkAndMoveVendorToPassIfAllApproved] All QC checks approved! Moving vendor ${vendorId} to Pass`);
+      console.log(
+        `[checkAndMoveVendorToPassIfAllApproved] All QC checks approved! Moving vendor ${vendorId} to Pass`,
+      );
 
       await client.query(
         `UPDATE oversea_schedule_vendors 
          SET status = 'Pass', 
              updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true`,
-        [vendorId]
+        [vendorId],
       );
-
 
       const vendorInfo = await client.query(
         `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
-        [vendorId]
+        [vendorId],
       );
 
       if (vendorInfo.rowCount > 0) {
         const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
-
 
         const allVendorsCheck = await client.query(
           `SELECT COUNT(*) as total, 
                   SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as pass_count
            FROM oversea_schedule_vendors 
            WHERE oversea_schedule_id = $1 AND is_active = true`,
-          [scheduleId]
+          [scheduleId],
         );
 
         const { total, pass_count } = allVendorsCheck.rows[0];
@@ -593,9 +560,11 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
              SET status = 'Pass', 
                  updated_at = CURRENT_TIMESTAMP 
              WHERE id = $1 AND is_active = true`,
-            [scheduleId]
+            [scheduleId],
           );
-          console.log(`[checkAndMoveVendorToPassIfAllApproved] Schedule ${scheduleId} moved to Pass`);
+          console.log(
+            `[checkAndMoveVendorToPassIfAllApproved] Schedule ${scheduleId} moved to Pass`,
+          );
         }
       }
 
@@ -604,23 +573,22 @@ const checkAndMoveVendorToPassIfAllApproved = async (client, vendorId) => {
 
     return false;
   } catch (error) {
-    console.error(`[checkAndMoveVendorToPassIfAllApproved] Error:`, error.message);
+    console.error(
+      `[checkAndMoveVendorToPassIfAllApproved] Error:`,
+      error.message,
+    );
     return false;
   }
 };
-
-
-
 
 const resolveEmployeeId = async (client, empName) => {
   if (!empName) return null;
   const q = await client.query(
     `SELECT id FROM employees WHERE LOWER(emp_name)=LOWER($1) LIMIT 1`,
-    [empName]
+    [empName],
   );
   return q.rows[0]?.id ?? null;
 };
-
 
 router.post("/", async (req, res) => {
   const client = await pool.connect();
@@ -632,21 +600,22 @@ router.post("/", async (req, res) => {
       uploadByName,
       totalVendor,
       totalPallet,
-      totalItem
+      totalItem,
     } = req.body || {};
 
     if (!stockLevel || !modelName || !scheduleDate) {
-      return res.status(400).json({ success: false, message: "Missing fields" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing fields" });
     }
 
     await client.query("BEGIN");
     const uploadBy = await resolveEmployeeId(client, uploadByName);
 
-
     const now = new Date();
     const scheduleDateObj = new Date(scheduleDate);
 
-    const scheduleCode = `OVERSEA-${String(scheduleDateObj.getDate()).padStart(2, '0')}/${String(scheduleDateObj.getMonth() + 1).padStart(2, '0')}/${scheduleDateObj.getFullYear()}/${String(now.getHours()).padStart(2, '0')}.${String(now.getMinutes()).padStart(2, '0')}.${String(now.getSeconds()).padStart(2, '0')}`;
+    const scheduleCode = `OVERSEA-${String(scheduleDateObj.getDate()).padStart(2, "0")}/${String(scheduleDateObj.getMonth() + 1).padStart(2, "0")}/${scheduleDateObj.getFullYear()}/${String(now.getHours()).padStart(2, "0")}.${String(now.getMinutes()).padStart(2, "0")}.${String(now.getSeconds()).padStart(2, "0")}`;
 
     const ins = await client.query(
       `INSERT INTO oversea_schedules
@@ -664,8 +633,8 @@ router.post("/", async (req, res) => {
         scheduleDate,
         totalVendor || 0,
         totalPallet || 0,
-        totalItem || 0
-      ]
+        totalItem || 0,
+      ],
     );
 
     await client.query("COMMIT");
@@ -673,47 +642,55 @@ router.post("/", async (req, res) => {
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("[Create Oversea Schedule] Error:", e.message);
-    res.status(400).json({ success: false, message: e.message || "Failed to create schedule" });
+    res
+      .status(400)
+      .json({
+        success: false,
+        message: e.message || "Failed to create schedule",
+      });
   } finally {
     client.release();
   }
 });
 
-
 router.get("/check-date", async (req, res) => {
   try {
     const { scheduleDate } = req.query;
     if (!scheduleDate) {
-      return res.status(400).json({ success: false, message: "scheduleDate is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "scheduleDate is required" });
     }
 
     const { rows } = await pool.query(
       `SELECT id, schedule_code, TO_CHAR(schedule_date, 'YYYY-MM-DD') as schedule_date, stock_level, model_name
        FROM oversea_schedules WHERE schedule_date = $1::date AND is_active = true LIMIT 1`,
-      [scheduleDate]
+      [scheduleDate],
     );
 
-    return res.json({ success: true, exists: rows.length > 0, schedule: rows[0] || null });
+    return res.json({
+      success: true,
+      exists: rows.length > 0,
+      schedule: rows[0] || null,
+    });
   } catch (err) {
     console.error("[Check Schedule Date] Error:", err.message);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
-
 router.get("/", async (req, res) => {
   const client = await pool.connect();
   try {
     const { status, date_from, date_to, vendor_name, part_code } = req.query;
 
-
     const statusMapping = {
-      "New": "New",
-      "Schedule": "Schedule",
-      "Received": "Received",
+      New: "New",
+      Schedule: "Schedule",
+      Received: "Received",
       "IQC Progress": "IQC Progress",
-      "Pass": "Pass",
-      "Complete": "Complete"
+      Pass: "Pass",
+      Complete: "Complete",
     };
 
     let query = `
@@ -738,13 +715,11 @@ router.get("/", async (req, res) => {
     const params = [];
     let paramCount = 0;
 
-
     if (status && statusMapping[status]) {
       paramCount++;
       query += ` AND os.status = $${paramCount}`;
       params.push(statusMapping[status]);
     }
-
 
     if (date_from) {
       paramCount++;
@@ -766,13 +741,11 @@ router.get("/", async (req, res) => {
     const result = await client.query(query, params);
     console.log("Found schedules:", result.rows.length);
 
-
     const schedulesWithDetails = await Promise.all(
       result.rows.map(async (schedule) => {
         console.log(`Fetching vendors for schedule ${schedule.id}`);
 
         try {
-
           const vendorsResult = await client.query(
             `SELECT 
               osv.id,
@@ -807,11 +780,12 @@ router.get("/", async (req, res) => {
             WHERE osv.oversea_schedule_id = $1 
               AND osv.is_active = true
             ORDER BY osv.id ASC`,
-            [schedule.id]
+            [schedule.id],
           );
 
-          console.log(`Found ${vendorsResult.rows.length} vendors for schedule ${schedule.id}`);
-
+          console.log(
+            `Found ${vendorsResult.rows.length} vendors for schedule ${schedule.id}`,
+          );
 
           const vendorsWithParts = await Promise.all(
             vendorsResult.rows.map(async (vendor) => {
@@ -839,53 +813,59 @@ router.get("/", async (req, res) => {
                   WHERE osp.oversea_schedule_vendor_id = $1 
                     AND osp.is_active = true
                   ORDER BY osp.id ASC`,
-                  [vendor.id]
+                  [vendor.id],
                 );
 
-                console.log(`Found ${partsResult.rows.length} parts for vendor ${vendor.id}`);
+                console.log(
+                  `Found ${partsResult.rows.length} parts for vendor ${vendor.id}`,
+                );
                 return {
                   ...vendor,
-                  parts: partsResult.rows.map(p => ({
+                  parts: partsResult.rows.map((p) => ({
                     ...p,
                     qty: p.quantity,
-                    qty_box: p.quantity_box
-                  }))
+                    qty_box: p.quantity_box,
+                  })),
                 };
               } catch (error) {
-                console.error(`Error fetching parts for vendor ${vendor.id}:`, error);
+                console.error(
+                  `Error fetching parts for vendor ${vendor.id}:`,
+                  error,
+                );
                 return { ...vendor, parts: [] };
               }
-            })
+            }),
           );
 
           return {
             ...schedule,
-            vendors: vendorsWithParts
+            vendors: vendorsWithParts,
           };
         } catch (error) {
-          console.error(`Error fetching vendors for schedule ${schedule.id}:`, error);
+          console.error(
+            `Error fetching vendors for schedule ${schedule.id}:`,
+            error,
+          );
           return { ...schedule, vendors: [] };
         }
-      })
+      }),
     );
 
     res.json({
       success: true,
-      data: schedulesWithDetails
+      data: schedulesWithDetails,
     });
-
   } catch (error) {
     console.error("[GET Oversea Schedules] Error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch schedules",
-      error: error.message
+      error: error.message,
     });
   } finally {
     client.release();
   }
 });
-
 
 router.get("/received-vendors", async (req, res) => {
   const client = await pool.connect();
@@ -900,7 +880,7 @@ router.get("/received-vendors", async (req, res) => {
        LEFT JOIN employees e_move ON e_move.id = osv.move_by
        LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
        WHERE osv.status = 'Received' AND osv.is_active = true
-       ORDER BY osv.move_at DESC`
+       ORDER BY osv.move_at DESC`,
     );
 
     const vendorsWithParts = await Promise.all(
@@ -921,9 +901,8 @@ router.get("/received-vendors", async (req, res) => {
            FROM oversea_schedule_parts osp
            WHERE osp.oversea_schedule_vendor_id = $1 AND osp.is_active = true
            ORDER BY osp.id ASC`,
-          [vendor.id]
+          [vendor.id],
         );
-
 
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
@@ -937,25 +916,25 @@ router.get("/received-vendors", async (req, res) => {
 
         return {
           ...vendor,
-          parts: partsWithParsedDates
+          parts: partsWithParsedDates,
         };
-      })
+      }),
     );
 
     res.json({ success: true, vendors: vendorsWithParts });
   } catch (error) {
     console.error("[GET Received Vendors] Error:", error);
-    res.status(500).json({ success: false, message: "Failed to fetch received vendors" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch received vendors" });
   } finally {
     client.release();
   }
 });
 
-
 router.get("/iqc-progress-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
-
     const vendorsResult = await client.query(
       `SELECT 
         osv.id,
@@ -982,7 +961,6 @@ router.get("/iqc-progress-vendors", async (req, res) => {
        ORDER BY osv.approve_at DESC, osv.id ASC`,
     );
 
-
     const vendorsWithParts = await Promise.all(
       vendorsResult.rows.map(async (vendor) => {
         const partsResult = await client.query(
@@ -1004,7 +982,6 @@ router.get("/iqc-progress-vendors", async (req, res) => {
            ORDER BY osp.id ASC`,
           [vendor.id],
         );
-
 
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
@@ -1046,7 +1023,6 @@ router.get("/iqc-progress-vendors", async (req, res) => {
   }
 });
 
-
 router.get("/pass-vendors", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1060,12 +1036,11 @@ router.get("/pass-vendors", async (req, res) => {
        LEFT JOIN employees e_sample ON e_sample.id = osv.sample_by
        LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
        WHERE osv.status = 'Pass' AND osv.is_active = true
-       ORDER BY osv.sample_at DESC`
+       ORDER BY osv.sample_at DESC`,
     );
 
     const vendorsWithParts = await Promise.all(
       result.rows.map(async (vendor) => {
-
         const partsResult = await client.query(
           `SELECT 
             osp.id,
@@ -1083,9 +1058,8 @@ router.get("/pass-vendors", async (req, res) => {
           FROM oversea_schedule_parts osp
           WHERE osp.oversea_schedule_vendor_id = $1 AND osp.is_active = true
           ORDER BY osp.id ASC`,
-          [vendor.id]
+          [vendor.id],
         );
-
 
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
@@ -1105,19 +1079,20 @@ router.get("/pass-vendors", async (req, res) => {
 
         return {
           ...vendor,
-          parts: partsWithParsedDates
+          parts: partsWithParsedDates,
         };
-      })
+      }),
     );
     res.json({ success: true, vendors: vendorsWithParts });
   } catch (error) {
     console.error("[GET Pass Vendors] Error:", error);
-    res.status(500).json({ success: false, message: "Failed to fetch pass vendors" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch pass vendors" });
   } finally {
     client.release();
   }
 });
-
 
 router.get("/complete-vendors", async (req, res) => {
   const client = await pool.connect();
@@ -1132,12 +1107,11 @@ router.get("/complete-vendors", async (req, res) => {
        LEFT JOIN employees e_complete ON e_complete.id = osv.complete_by
        LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
        WHERE osv.status = 'Complete' AND osv.is_active = true
-       ORDER BY osv.complete_at DESC`
+       ORDER BY osv.complete_at DESC`,
     );
 
     const vendorsWithParts = await Promise.all(
       result.rows.map(async (vendor) => {
-
         const partsResult = await client.query(
           `SELECT 
             osp.id,
@@ -1155,9 +1129,8 @@ router.get("/complete-vendors", async (req, res) => {
           FROM oversea_schedule_parts osp
           WHERE osp.oversea_schedule_vendor_id = $1 AND osp.is_active = true
           ORDER BY osp.id ASC`,
-          [vendor.id]
+          [vendor.id],
         );
-
 
         const partsWithParsedDates = partsResult.rows.map((part) => ({
           ...part,
@@ -1177,19 +1150,20 @@ router.get("/complete-vendors", async (req, res) => {
 
         return {
           ...vendor,
-          parts: partsWithParsedDates
+          parts: partsWithParsedDates,
         };
-      })
+      }),
     );
     res.json({ success: true, vendors: vendorsWithParts });
   } catch (error) {
     console.error("[GET Complete Vendors] Error:", error);
-    res.status(500).json({ success: false, message: "Failed to fetch complete vendors" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch complete vendors" });
   } finally {
     client.release();
   }
 });
-
 
 router.post("/:scheduleId/vendors", async (req, res) => {
   const client = await pool.connect();
@@ -1213,7 +1187,6 @@ router.post("/:scheduleId/vendors", async (req, res) => {
 
     await client.query("BEGIN");
 
-
     const scheduleCheck = await client.query(
       `SELECT id, schedule_date, stock_level, model_name, status 
        FROM oversea_schedules 
@@ -1231,7 +1204,6 @@ router.post("/:scheduleId/vendors", async (req, res) => {
 
     const schedule = scheduleCheck.rows[0];
 
-
     const tripCheck = await client.query(
       `SELECT id, arv_to FROM trips WHERE id = $1`,
       [trip_id],
@@ -1248,8 +1220,8 @@ router.post("/:scheduleId/vendors", async (req, res) => {
     const arrivalTime = tripCheck.rows[0].arv_to;
 
     const doArray = Array.isArray(do_number)
-      ? do_number.filter(d => d && d.trim())
-      : [do_number].filter(d => d && d.trim());
+      ? do_number.filter((d) => d && d.trim())
+      : [do_number].filter((d) => d && d.trim());
 
     const result = await client.query(
       `INSERT INTO oversea_schedule_vendors
@@ -1265,9 +1237,9 @@ router.post("/:scheduleId/vendors", async (req, res) => {
         vendor_id,
         doArray.join(" | "),
         arrivalTime,
-        schedule.schedule_date,  
-        schedule.stock_level,    
-        schedule.model_name     
+        schedule.schedule_date,
+        schedule.stock_level,
+        schedule.model_name,
       ],
     );
 
@@ -1303,7 +1275,6 @@ router.post("/:scheduleId/vendors", async (req, res) => {
   }
 });
 
-
 router.post("/:scheduleId/vendors/bulk", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1313,7 +1284,7 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
     console.log(`[BULK ADD Vendors] Request:`, {
       scheduleId,
       itemsCount: items?.length || 0,
-      items
+      items,
     });
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -1324,7 +1295,6 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
     }
 
     await client.query("BEGIN");
-
 
     const scheduleCheck = await client.query(
       `SELECT id, schedule_date, stock_level, model_name, status 
@@ -1348,15 +1318,20 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      const { tripId, vendorId, doNumbers, arrivalTime, totalPallet, totalItem } = item;
+      const {
+        tripId,
+        vendorId,
+        doNumbers,
+        arrivalTime,
+        totalPallet,
+        totalItem,
+      } = item;
 
       try {
-
         if (!tripId || !vendorId) {
           vendorErrors.push(`Item ${i + 1}: Missing tripId or vendorId`);
           continue;
         }
-
 
         let finalArrivalTime = arrivalTime;
         if (!finalArrivalTime) {
@@ -1369,11 +1344,9 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
           }
         }
 
-
         const doArray = Array.isArray(doNumbers)
-          ? doNumbers.filter(d => d && String(d).trim())
-          : [doNumbers].filter(d => d && String(d).trim());
-
+          ? doNumbers.filter((d) => d && String(d).trim())
+          : [doNumbers].filter((d) => d && String(d).trim());
 
         const result = await client.query(
           `INSERT INTO oversea_schedule_vendors
@@ -1393,19 +1366,23 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
             totalItem || 0,
             schedule.schedule_date,
             schedule.stock_level,
-            schedule.model_name
+            schedule.model_name,
           ],
         );
 
         vendorIds.push(result.rows[0].id);
-        console.log(`[BULK ADD Vendors] Vendor ${i + 1} added:`, result.rows[0].id);
-
+        console.log(
+          `[BULK ADD Vendors] Vendor ${i + 1} added:`,
+          result.rows[0].id,
+        );
       } catch (error) {
-        console.error(`[BULK ADD Vendors] Error adding vendor ${i + 1}:`, error);
+        console.error(
+          `[BULK ADD Vendors] Error adding vendor ${i + 1}:`,
+          error,
+        );
         vendorErrors.push(`Item ${i + 1}: ${error.message}`);
       }
     }
-
 
     if (vendorIds.length === 0 && vendorErrors.length > 0) {
       await client.query("ROLLBACK");
@@ -1415,7 +1392,6 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
         errors: vendorErrors,
       });
     }
-
 
     await client.query(
       `UPDATE oversea_schedules
@@ -1428,12 +1404,13 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
       [scheduleId],
     );
 
-
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
 
-    console.log(`[BULK ADD Vendors] Success: Added ${vendorIds.length} vendors`);
+    console.log(
+      `[BULK ADD Vendors] Success: Added ${vendorIds.length} vendors`,
+    );
 
     res.status(201).json({
       success: true,
@@ -1453,7 +1430,6 @@ router.post("/:scheduleId/vendors/bulk", async (req, res) => {
     client.release();
   }
 });
-
 
 router.post("/vendors/:vendorId/parts", async (req, res) => {
   const client = await pool.connect();
@@ -1480,7 +1456,6 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
 
     await client.query("BEGIN");
 
-
     const vendorCheck = await client.query(
       `SELECT id, oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1 AND is_active = true`,
       [vendorId],
@@ -1496,7 +1471,6 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
 
     const scheduleId = vendorCheck.rows[0].oversea_schedule_id;
 
-
     let partId = null;
     const partRes = await client.query(
       `SELECT id, qty_per_box FROM kanban_master WHERE part_code = $1 AND is_active = true LIMIT 1`,
@@ -1509,12 +1483,10 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
       qtyPerBox = partRes.rows[0].qty_per_box || 1;
     }
 
-
     let finalQuantityBox = quantity_box;
     if (!quantity_box && quantity && qtyPerBox > 0) {
       finalQuantityBox = Math.ceil(Number(quantity) / qtyPerBox);
     }
-
 
     const result = await client.query(
       `INSERT INTO oversea_schedule_parts
@@ -1533,9 +1505,7 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
       ],
     );
 
-
     await updateVendorTotals(client, vendorId);
-
 
     await updateScheduleTotals(client, scheduleId);
 
@@ -1561,7 +1531,6 @@ router.post("/vendors/:vendorId/parts", async (req, res) => {
   }
 });
 
-
 router.post("/:vendorId/parts/bulk", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1569,25 +1538,28 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
     const { items } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, message: "items array is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "items array is required" });
     }
 
     await client.query("BEGIN");
 
     const vendorCheck = await client.query(
       `SELECT id, oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1 AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
     if (vendorCheck.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Vendor not found" });
     }
 
     const scheduleId = vendorCheck.rows[0].oversea_schedule_id;
     const insertedParts = [];
 
     for (const item of items) {
-
       const partCode = item.partCode || item.part_code;
       const partName = item.partName || item.part_name || "";
       const quantity = item.quantity || item.qty || 0;
@@ -1603,13 +1575,12 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
 
       const kanbanCheck = await client.query(
         `SELECT id, qty_per_box FROM kanban_master WHERE part_code = $1 AND is_active = true LIMIT 1`,
-        [partCode]
+        [partCode],
       );
       if (kanbanCheck.rowCount > 0) {
         partId = kanbanCheck.rows[0].id;
         qtyPerBox = kanbanCheck.rows[0].qty_per_box || 1;
       }
-
 
       let finalQuantityBox = quantityBox;
       if (!quantityBox && quantity && qtyPerBox > 0) {
@@ -1621,22 +1592,40 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
           (oversea_schedule_vendor_id, part_id, part_code, part_name, quantity, quantity_box, unit, do_number, remark, prod_date, prod_dates, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::jsonb, 'New')
          RETURNING id, part_code, part_name, quantity as qty, quantity_box as qty_box, unit`,
-        [vendorId, partId, partCode, partName, quantity || 0, finalQuantityBox || 0, unit || "PCS", doNumber, remark, prodDate || null, prodDates ? JSON.stringify(prodDates) : "[]"]
+        [
+          vendorId,
+          partId,
+          partCode,
+          partName,
+          quantity || 0,
+          finalQuantityBox || 0,
+          unit || "PCS",
+          doNumber,
+          remark,
+          prodDate || null,
+          prodDates ? JSON.stringify(prodDates) : "[]",
+        ],
       );
       insertedParts.push(result.rows[0]);
     }
 
-
     await updateVendorTotals(client, vendorId);
-
 
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
 
-    console.log(`[Bulk Insert Parts] Success: ${insertedParts.length} parts inserted for vendor ${vendorId}`);
+    console.log(
+      `[Bulk Insert Parts] Success: ${insertedParts.length} parts inserted for vendor ${vendorId}`,
+    );
 
-    res.status(201).json({ success: true, parts: insertedParts, partIds: insertedParts.map(p => p.id) });
+    res
+      .status(201)
+      .json({
+        success: true,
+        parts: insertedParts,
+        partIds: insertedParts.map((p) => p.id),
+      });
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("[Bulk Insert Parts] Error:", error);
@@ -1646,15 +1635,24 @@ router.post("/:vendorId/parts/bulk", async (req, res) => {
   }
 });
 
-
 router.put("/bulk/status", async (req, res) => {
   const client = await pool.connect();
   try {
     const { scheduleIds, status, movedByName } = req.body;
-    console.log("[Bulk Update Status] Request:", { scheduleIds, status, movedByName });
+    console.log("[Bulk Update Status] Request:", {
+      scheduleIds,
+      status,
+      movedByName,
+    });
 
-    if (!scheduleIds || !Array.isArray(scheduleIds) || scheduleIds.length === 0) {
-      return res.status(400).json({ success: false, message: "scheduleIds array is required" });
+    if (
+      !scheduleIds ||
+      !Array.isArray(scheduleIds) ||
+      scheduleIds.length === 0
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, message: "scheduleIds array is required" });
     }
 
     await client.query("BEGIN");
@@ -1665,23 +1663,24 @@ router.put("/bulk/status", async (req, res) => {
       Received: "Received",
       "IQC Progress": "IQC Progress",
       Pass: "Pass",
-      Complete: "Complete"
+      Complete: "Complete",
     };
     const dbStatus = statusMapping[status] || status;
-
 
     let movedById = null;
     if (movedByName) {
       const empResult = await client.query(
         `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
-        [movedByName]
+        [movedByName],
       );
       if (empResult.rowCount > 0) {
         movedById = empResult.rows[0].id;
       }
-      console.log(`[Bulk Update Status] Employee ID for ${movedByName}:`, movedById);
+      console.log(
+        `[Bulk Update Status] Employee ID for ${movedByName}:`,
+        movedById,
+      );
     }
-
 
     let result;
     if (movedById) {
@@ -1692,16 +1691,15 @@ router.put("/bulk/status", async (req, res) => {
              updated_at = CURRENT_TIMESTAMP 
          WHERE id = ANY($3::int[]) AND is_active = true 
          RETURNING id, schedule_code, status, upload_by`,
-        [dbStatus, movedById, scheduleIds]
+        [dbStatus, movedById, scheduleIds],
       );
     } else {
-
       result = await client.query(
         `UPDATE oversea_schedules 
          SET status = $1, updated_at = CURRENT_TIMESTAMP 
          WHERE id = ANY($2::int[]) AND is_active = true 
          RETURNING id, schedule_code, status`,
-        [dbStatus, scheduleIds]
+        [dbStatus, scheduleIds],
       );
     }
 
@@ -1711,7 +1709,7 @@ router.put("/bulk/status", async (req, res) => {
       `UPDATE oversea_schedule_vendors
        SET status = $1, updated_at = CURRENT_TIMESTAMP
        WHERE oversea_schedule_id = ANY($2::int[]) AND is_active = true`,
-      [dbStatus, scheduleIds]
+      [dbStatus, scheduleIds],
     );
 
     await client.query(
@@ -1721,14 +1719,14 @@ router.put("/bulk/status", async (req, res) => {
          SELECT id FROM oversea_schedule_vendors
          WHERE oversea_schedule_id = ANY($2::int[]) AND is_active = true
        ) AND is_active = true`,
-      [dbStatus, scheduleIds]
+      [dbStatus, scheduleIds],
     );
 
     await client.query("COMMIT");
     res.json({
       success: true,
       updated: result.rows,
-      message: `${result.rowCount} schedule(s) moved to ${status} tab`
+      message: `${result.rowCount} schedule(s) moved to ${status} tab`,
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1736,13 +1734,12 @@ router.put("/bulk/status", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update schedules",
-      error: error.message
+      error: error.message,
     });
   } finally {
     client.release();
   }
 });
-
 
 router.put("/vendors/:vendorId/status", async (req, res) => {
   const client = await pool.connect();
@@ -1758,28 +1755,39 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
        FROM oversea_schedule_vendors osv
        LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
        WHERE osv.id = $1 AND osv.is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     if (vendorCheck.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Vendor not found" });
     }
 
     const scheduleId = vendorCheck.rows[0].oversea_schedule_id;
     const scheduleData = vendorCheck.rows[0];
 
-    const vendorStatusMapping = { Received: "Received", "IQC Progress": "IQC Progress", Pass: "Pass", Complete: "Complete" };
+    const vendorStatusMapping = {
+      Received: "Received",
+      "IQC Progress": "IQC Progress",
+      Pass: "Pass",
+      Complete: "Complete",
+    };
     const newVendorStatus = vendorStatusMapping[status] || status;
 
     let moveById = null;
     if (moveByName) {
-      const empResult = await client.query(`SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`, [moveByName]);
+      const empResult = await client.query(
+        `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
+        [moveByName],
+      );
       if (empResult.rowCount > 0) moveById = empResult.rows[0].id;
     }
 
-
-    console.log(`[Move Vendor] Recalculating totals for vendor ${vendorId} before moving to ${newVendorStatus}`);
+    console.log(
+      `[Move Vendor] Recalculating totals for vendor ${vendorId} before moving to ${newVendorStatus}`,
+    );
     await updateVendorTotals(client, vendorId);
 
     const vendorResult = await client.query(
@@ -1788,52 +1796,73 @@ router.put("/vendors/:vendorId/status", async (req, res) => {
            schedule_date_ref = $3, stock_level_ref = $4, model_name_ref = $5, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $6 AND is_active = true 
        RETURNING id, oversea_schedule_id, status, move_by, move_at, total_pallet, total_item`,
-      [newVendorStatus, moveById, scheduleData.schedule_date, scheduleData.stock_level, scheduleData.model_name, vendorId]
+      [
+        newVendorStatus,
+        moveById,
+        scheduleData.schedule_date,
+        scheduleData.stock_level,
+        scheduleData.model_name,
+        vendorId,
+      ],
     );
 
-    console.log(`[Move Vendor] Vendor ${vendorId} moved to ${newVendorStatus} with total_pallet=${vendorResult.rows[0].total_pallet}`);
+    console.log(
+      `[Move Vendor] Vendor ${vendorId} moved to ${newVendorStatus} with total_pallet=${vendorResult.rows[0].total_pallet}`,
+    );
 
     await client.query(
       `UPDATE oversea_schedule_parts
        SET status = $1, updated_at = CURRENT_TIMESTAMP
        WHERE oversea_schedule_vendor_id = $2 AND is_active = true`,
-      [newVendorStatus, vendorId]
+      [newVendorStatus, vendorId],
     );
 
     const allVendorsCheck = await client.query(
       `SELECT COUNT(*) as total, SUM(CASE WHEN status = $1 THEN 1 ELSE 0 END) as matched_count
        FROM oversea_schedule_vendors WHERE oversea_schedule_id = $2 AND is_active = true`,
-      [newVendorStatus, scheduleId]
+      [newVendorStatus, scheduleId],
     );
 
     const { total, matched_count } = allVendorsCheck.rows[0];
     if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
       await client.query(
         `UPDATE oversea_schedules SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active = true`,
-        [newVendorStatus, scheduleId]
+        [newVendorStatus, scheduleId],
       );
     }
-
 
     await updateScheduleTotals(client, scheduleId);
 
     await client.query("COMMIT");
-    res.json({ success: true, data: { vendor: vendorResult.rows[0], scheduleId } });
+    res.json({
+      success: true,
+      data: { vendor: vendorResult.rows[0], scheduleId },
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("[UPDATE Vendor Status] Error:", error);
-    res.status(500).json({ success: false, message: "Failed to update vendor status" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to update vendor status" });
   } finally {
     client.release();
   }
 });
 
-
 router.put("/parts/:partId", async (req, res) => {
   const client = await pool.connect();
   try {
     const { partId } = req.params;
-    const { quantity, quantityBox, status, remark, prod_date, prod_dates, updated_by, updated_by_name } = req.body;
+    const {
+      quantity,
+      quantityBox,
+      status,
+      remark,
+      prod_date,
+      prod_dates,
+      updated_by,
+      updated_by_name,
+    } = req.body;
 
     console.log("[UPDATE Part] Request:", {
       partId,
@@ -1844,11 +1873,10 @@ router.put("/parts/:partId", async (req, res) => {
       prod_date,
       prod_dates,
       updated_by,
-      updated_by_name
+      updated_by_name,
     });
 
     await client.query("BEGIN");
-
 
     const currentPart = await client.query(
       `SELECT osp.id, osp.oversea_schedule_vendor_id, osp.prod_dates, osp.sample_dates,
@@ -1856,7 +1884,7 @@ router.put("/parts/:partId", async (req, res) => {
        FROM oversea_schedule_parts osp
        JOIN oversea_schedule_vendors osv ON osv.id = osp.oversea_schedule_vendor_id
        WHERE osp.id = $1 AND osp.is_active = true`,
-      [partId]
+      [partId],
     );
 
     if (currentPart.rowCount === 0) {
@@ -1869,16 +1897,18 @@ router.put("/parts/:partId", async (req, res) => {
 
     const vendorId = currentPart.rows[0].oversea_schedule_vendor_id;
 
-
     const updateFields = [];
     const updateValues = [];
     let paramCount = 1;
 
     if (quantity !== undefined) {
-      const parsedQty = quantity === '' || quantity === null ? null : parseInt(quantity, 10);
+      const parsedQty =
+        quantity === "" || quantity === null ? null : parseInt(quantity, 10);
       if (parsedQty !== null && isNaN(parsedQty)) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ success: false, message: "Invalid quantity value" });
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid quantity value" });
       }
       updateFields.push(`quantity = $${paramCount}`);
       updateValues.push(parsedQty);
@@ -1886,10 +1916,15 @@ router.put("/parts/:partId", async (req, res) => {
     }
 
     if (quantityBox !== undefined) {
-      const parsedQtyBox = quantityBox === '' || quantityBox === null ? null : parseInt(quantityBox, 10);
+      const parsedQtyBox =
+        quantityBox === "" || quantityBox === null
+          ? null
+          : parseInt(quantityBox, 10);
       if (parsedQtyBox !== null && isNaN(parsedQtyBox)) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ success: false, message: "Invalid quantityBox value" });
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid quantityBox value" });
       }
       updateFields.push(`quantity_box = $${paramCount}`);
       updateValues.push(parsedQtyBox);
@@ -1918,7 +1953,7 @@ router.put("/parts/:partId", async (req, res) => {
       let prodDatesValue = prod_dates;
       if (Array.isArray(prod_dates)) {
         prodDatesValue = JSON.stringify(prod_dates);
-      } else if (typeof prod_dates === 'string') {
+      } else if (typeof prod_dates === "string") {
         try {
           JSON.parse(prod_dates);
           prodDatesValue = prod_dates;
@@ -1926,7 +1961,7 @@ router.put("/parts/:partId", async (req, res) => {
           prodDatesValue = JSON.stringify([prod_dates]);
         }
       } else {
-        prodDatesValue = '[]';
+        prodDatesValue = "[]";
       }
 
       updateFields.push(`prod_dates = $${paramCount}::jsonb`);
@@ -1934,9 +1969,7 @@ router.put("/parts/:partId", async (req, res) => {
       paramCount++;
     }
 
-
     updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
-
 
     if (updateFields.length === 0) {
       await client.query("ROLLBACK");
@@ -1946,28 +1979,26 @@ router.put("/parts/:partId", async (req, res) => {
       });
     }
 
-
     updateValues.push(partId);
-
 
     const result = await client.query(
       `UPDATE oversea_schedule_parts 
        SET ${updateFields.join(", ")} 
        WHERE id = $${paramCount} AND is_active = true
        RETURNING *`,
-      updateValues
+      updateValues,
     );
 
     console.log("[UPDATE Part] Part updated:", result.rows[0]);
-
 
     if (prod_dates !== undefined) {
       const updatedPart = result.rows[0];
       const newProdDates = Array.isArray(updatedPart.prod_dates)
         ? updatedPart.prod_dates
-        : (typeof updatedPart.prod_dates === 'string' ? JSON.parse(updatedPart.prod_dates || '[]') : []);
+        : typeof updatedPart.prod_dates === "string"
+          ? JSON.parse(updatedPart.prod_dates || "[]")
+          : [];
 
-      // Use pre-update values from currentPart + fetch vendor_name
       const rawSample = currentPart.rows[0].sample_dates;
       const partCode = currentPart.rows[0].part_code;
       const partName = currentPart.rows[0].part_name;
@@ -1975,23 +2006,25 @@ router.put("/parts/:partId", async (req, res) => {
         `SELECT vd.vendor_name FROM oversea_schedule_vendors osv
          JOIN vendor_detail vd ON vd.id = osv.vendor_id
          WHERE osv.id = $1`,
-        [vendorId]
+        [vendorId],
       );
-      const vendorName = vendorNameRes.rows[0]?.vendor_name || '';
+      const vendorName = vendorNameRes.rows[0]?.vendor_name || "";
       const oldSampleDates = Array.isArray(rawSample)
         ? rawSample
-        : (typeof rawSample === 'string' ? JSON.parse(rawSample || '[]') : []);
+        : typeof rawSample === "string"
+          ? JSON.parse(rawSample || "[]")
+          : [];
 
-      // Dates removed from prod_dates that were in sample_dates
-      const removedSampleDates = oldSampleDates.filter(d => !newProdDates.includes(d));
-      // Dates added to prod_dates - use pre-update values from currentPart
+      const removedSampleDates = oldSampleDates.filter(
+        (d) => !newProdDates.includes(d),
+      );
       const prevRaw = currentPart.rows[0].prod_dates;
       const prevProdDates = Array.isArray(prevRaw)
         ? prevRaw
-        : (typeof prevRaw === 'string' ? JSON.parse(prevRaw || '[]') : []);
-      const addedDates = newProdDates.filter(d => !prevProdDates.includes(d));
-
-      // --- Handle REMOVED sample dates ---
+        : typeof prevRaw === "string"
+          ? JSON.parse(prevRaw || "[]")
+          : [];
+      const addedDates = newProdDates.filter((d) => !prevProdDates.includes(d));
       if (removedSampleDates.length > 0) {
         for (const removedDate of removedSampleDates) {
           await client.query(
@@ -2002,16 +2035,13 @@ router.put("/parts/:partId", async (req, res) => {
                AND status != 'Complete'
                AND TO_CHAR(production_date, 'YYYY-MM-DD') = $2
                AND is_active = true`,
-            [partId, String(removedDate).split('T')[0]]
+            [partId, String(removedDate).split("T")[0]],
           );
         }
       }
-
-      // --- Handle ADDED dates: check if they need a QC check ---
       const addedSampleDates = [];
       for (const addedDate of addedDates) {
-        const dateStr = String(addedDate).split('T')[0];
-        // Check if already Complete in qc_checks
+        const dateStr = String(addedDate).split("T")[0];
         const completeCheck = await client.query(
           `SELECT id FROM qc_checks
            WHERE part_code = $1
@@ -2019,10 +2049,9 @@ router.put("/parts/:partId", async (req, res) => {
              AND status = 'Complete'
              AND is_active = true
            LIMIT 1`,
-          [partCode, dateStr]
+          [partCode, dateStr],
         );
         if (completeCheck.rowCount === 0) {
-          // Not complete — it's a sample date, reactivate or create QC check
           addedSampleDates.push(addedDate);
           const existingInactive = await client.query(
             `SELECT id FROM qc_checks
@@ -2030,14 +2059,14 @@ router.put("/parts/:partId", async (req, res) => {
                AND TO_CHAR(production_date, 'YYYY-MM-DD') = $2
                AND data_from = 'M136'
              LIMIT 1`,
-            [partId, dateStr]
+            [partId, dateStr],
           );
           if (existingInactive.rowCount > 0) {
             const vApproveRes = await client.query(
               `SELECT em.emp_name, osv.approve_at FROM oversea_schedule_vendors osv
                LEFT JOIN employees em ON em.id = osv.approve_by
                WHERE osv.id = $1`,
-              [vendorId]
+              [vendorId],
             );
             const vApproveByName = vApproveRes.rows[0]?.emp_name || null;
             const vApproveAt = vApproveRes.rows[0]?.approve_at || null;
@@ -2048,14 +2077,14 @@ router.put("/parts/:partId", async (req, res) => {
                    created_at = COALESCE(created_at, $3),
                    updated_at = CURRENT_TIMESTAMP
                WHERE id = $1`,
-              [existingInactive.rows[0].id, vApproveByName, vApproveAt]
+              [existingInactive.rows[0].id, vApproveByName, vApproveAt],
             );
           } else {
             const vApproveResIns = await client.query(
               `SELECT em.emp_name, osv.approve_at FROM oversea_schedule_vendors osv
                LEFT JOIN employees em ON em.id = osv.approve_by
                WHERE osv.id = $1`,
-              [vendorId]
+              [vendorId],
             );
             const vApproveByNameIns = vApproveResIns.rows[0]?.emp_name || null;
             const vApproveAtIns = vApproveResIns.rows[0]?.approve_at || null;
@@ -2065,81 +2094,99 @@ router.put("/parts/:partId", async (req, res) => {
                 source_vendor_id, source_part_id, created_by, created_at, updated_at, is_active)
                VALUES ($1, $2, $3, $4::date, 'M136', 'M136 Part', $5, $6, $7, $8,
                        CURRENT_TIMESTAMP, true)`,
-              [partCode, partName, vendorName, dateStr, vendorId, partId, vApproveByNameIns, vApproveAtIns]
+              [
+                partCode,
+                partName,
+                vendorName,
+                dateStr,
+                vendorId,
+                partId,
+                vApproveByNameIns,
+                vApproveAtIns,
+              ],
             );
           }
         }
       }
 
-      // --- Recompute sample_dates ---
       const updatedSampleDates = [
-        ...oldSampleDates.filter(d => !removedSampleDates.includes(d)),
-        ...addedSampleDates
+        ...oldSampleDates.filter((d) => !removedSampleDates.includes(d)),
+        ...addedSampleDates,
       ];
       await client.query(
         `UPDATE oversea_schedule_parts
          SET sample_dates = $1::jsonb, updated_at = CURRENT_TIMESTAMP
          WHERE id = $2`,
-        [JSON.stringify(updatedSampleDates), partId]
+        [JSON.stringify(updatedSampleDates), partId],
       );
-
-      // --- Update part status based on vendor status ---
-      const osVendorStatus = currentPart.rows[0].vendor_status || 'IQC Progress';
-      const osStatusWhenSample = ['Schedule', 'New', 'Today', 'Received', 'Pass', 'Complete', 'IQC Progress'].includes(osVendorStatus) ? osVendorStatus : 'IQC Progress';
+      const osVendorStatus =
+        currentPart.rows[0].vendor_status || "IQC Progress";
+      const osStatusWhenSample = [
+        "Schedule",
+        "New",
+        "Today",
+        "Received",
+        "Pass",
+        "Complete",
+        "IQC Progress",
+      ].includes(osVendorStatus)
+        ? osVendorStatus
+        : "IQC Progress";
       if (updatedSampleDates.length === 0 && newProdDates.length > 0) {
         await client.query(
           `UPDATE oversea_schedule_parts SET status = 'PASS', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-          [partId]
+          [partId],
         );
       } else if (updatedSampleDates.length > 0) {
         await client.query(
           `UPDATE oversea_schedule_parts SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-          [osStatusWhenSample, partId]
+          [osStatusWhenSample, partId],
         );
       }
     }
 
-
     await updateVendorTotals(client, vendorId);
-
 
     const vendorInfo = await client.query(
       `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
-      [vendorId]
+      [vendorId],
     );
 
     if (vendorInfo.rowCount > 0) {
       const scheduleId = vendorInfo.rows[0].oversea_schedule_id;
 
-
       await updateScheduleTotals(client, scheduleId);
 
-
       if (updated_by_name) {
-        console.log(`[UPDATE Part] Updating schedule ${scheduleId} upload_by with:`, updated_by_name);
-
+        console.log(
+          `[UPDATE Part] Updating schedule ${scheduleId} upload_by with:`,
+          updated_by_name,
+        );
 
         const empResult = await client.query(
           `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
-          [updated_by_name]
+          [updated_by_name],
         );
 
         if (empResult.rowCount > 0) {
           const uploadById = empResult.rows[0].id;
 
-
           await client.query(
             `UPDATE oversea_schedules 
              SET upload_by = $1, updated_at = CURRENT_TIMESTAMP 
              WHERE id = $2 AND is_active = true`,
-            [uploadById, scheduleId]
+            [uploadById, scheduleId],
           );
-          console.log(`[UPDATE Part] Schedule ${scheduleId} upload_by updated to:`, uploadById);
+          console.log(
+            `[UPDATE Part] Schedule ${scheduleId} upload_by updated to:`,
+            uploadById,
+          );
         } else {
-          console.log(`[UPDATE Part] Employee not found for name: ${updated_by_name}`);
+          console.log(
+            `[UPDATE Part] Employee not found for name: ${updated_by_name}`,
+          );
         }
       }
-
     }
 
     await client.query("COMMIT");
@@ -2164,7 +2211,6 @@ router.put("/parts/:partId", async (req, res) => {
   }
 });
 
-
 router.delete("/parts/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2177,12 +2223,14 @@ router.delete("/parts/:id", async (req, res) => {
        FROM oversea_schedule_parts osp
        LEFT JOIN oversea_schedule_vendors osv ON osv.id = osp.oversea_schedule_vendor_id
        WHERE osp.id = $1 AND osp.is_active = true`,
-      [id]
+      [id],
     );
 
     if (partCheck.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Part not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Part not found" });
     }
 
     const vendorId = partCheck.rows[0].oversea_schedule_vendor_id;
@@ -2190,16 +2238,13 @@ router.delete("/parts/:id", async (req, res) => {
 
     console.log(`[DELETE Part] Deleting part ${id}...`);
 
-
     const partDeleted = await client.query(
       `DELETE FROM oversea_schedule_parts WHERE id = $1`,
-      [id]
+      [id],
     );
     console.log(`[DELETE Part] Deleted part ${id}`);
 
-
     await updateVendorTotals(client, vendorId);
-
 
     await updateScheduleTotals(client, scheduleId);
 
@@ -2208,7 +2253,7 @@ router.delete("/parts/:id", async (req, res) => {
     res.json({
       success: true,
       message: "Part deleted successfully",
-      deleted: partDeleted.rowCount
+      deleted: partDeleted.rowCount,
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2216,13 +2261,12 @@ router.delete("/parts/:id", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to delete part",
-      error: error.message
+      error: error.message,
     });
   } finally {
     client.release();
   }
 });
-
 
 router.delete("/vendors/:id", async (req, res) => {
   const client = await pool.connect();
@@ -2233,32 +2277,31 @@ router.delete("/vendors/:id", async (req, res) => {
 
     const vendorCheck = await client.query(
       `SELECT id, oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1 AND is_active = true`,
-      [id]
+      [id],
     );
 
     if (vendorCheck.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Vendor not found" });
     }
 
     const scheduleId = vendorCheck.rows[0].oversea_schedule_id;
 
     console.log(`[DELETE Vendor] Deleting vendor ${id} and all parts...`);
 
-
     const partsDeleted = await client.query(
       `DELETE FROM oversea_schedule_parts WHERE oversea_schedule_vendor_id = $1`,
-      [id]
+      [id],
     );
     console.log(`[DELETE Vendor] Deleted ${partsDeleted.rowCount} parts`);
 
-
     const vendorDeleted = await client.query(
       `DELETE FROM oversea_schedule_vendors WHERE id = $1`,
-      [id]
+      [id],
     );
     console.log(`[DELETE Vendor] Deleted vendor ${id}`);
-
 
     await client.query(
       `UPDATE oversea_schedules SET 
@@ -2267,7 +2310,7 @@ router.delete("/vendors/:id", async (req, res) => {
           WHERE oversea_schedule_id = $1 AND is_active = true
         ),
         updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [scheduleId]
+      [scheduleId],
     );
 
     await updateScheduleTotals(client, scheduleId);
@@ -2279,8 +2322,8 @@ router.delete("/vendors/:id", async (req, res) => {
       message: "Vendor and all parts deleted successfully",
       deleted: {
         parts: partsDeleted.rowCount,
-        vendor: vendorDeleted.rowCount
-      }
+        vendor: vendorDeleted.rowCount,
+      },
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2288,7 +2331,7 @@ router.delete("/vendors/:id", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to delete vendor",
-      error: error.message
+      error: error.message,
     });
   } finally {
     client.release();
@@ -2302,36 +2345,39 @@ router.delete("/:id", async (req, res) => {
 
     await client.query("BEGIN");
 
-    
     const scheduleCheck = await client.query(
       `SELECT id FROM oversea_schedules WHERE id = $1 AND is_active = true`,
-      [id]
+      [id],
     );
 
     if (scheduleCheck.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Schedule not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Schedule not found" });
     }
 
-    console.log(`[DELETE Schedule] Deleting schedule ${id} and all related data...`);
+    console.log(
+      `[DELETE Schedule] Deleting schedule ${id} and all related data...`,
+    );
 
     const partsDeleted = await client.query(
       `DELETE FROM oversea_schedule_parts 
        WHERE oversea_schedule_vendor_id IN 
        (SELECT id FROM oversea_schedule_vendors WHERE oversea_schedule_id = $1)`,
-      [id]
+      [id],
     );
     console.log(`[DELETE Schedule] Deleted ${partsDeleted.rowCount} parts`);
 
     const vendorsDeleted = await client.query(
       `DELETE FROM oversea_schedule_vendors WHERE oversea_schedule_id = $1`,
-      [id]
+      [id],
     );
     console.log(`[DELETE Schedule] Deleted ${vendorsDeleted.rowCount} vendors`);
 
     const scheduleDeleted = await client.query(
       `DELETE FROM oversea_schedules WHERE id = $1`,
-      [id]
+      [id],
     );
     console.log(`[DELETE Schedule] Deleted schedule ${id}`);
 
@@ -2343,8 +2389,8 @@ router.delete("/:id", async (req, res) => {
       deleted: {
         parts: partsDeleted.rowCount,
         vendors: vendorsDeleted.rowCount,
-        schedule: scheduleDeleted.rowCount
-      }
+        schedule: scheduleDeleted.rowCount,
+      },
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2352,7 +2398,7 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to delete schedule",
-      error: error.message
+      error: error.message,
     });
   } finally {
     client.release();
@@ -2370,7 +2416,7 @@ router.put("/vendors/:vendorId/recalculate-totals", async (req, res) => {
 
     const vendorCheck = await client.query(
       `SELECT oversea_schedule_id FROM oversea_schedule_vendors WHERE id = $1`,
-      [vendorId]
+      [vendorId],
     );
 
     if (vendorCheck.rowCount > 0) {
@@ -2383,7 +2429,10 @@ router.put("/vendors/:vendorId/recalculate-totals", async (req, res) => {
     res.json({
       success: true,
       message: "Totals recalculated",
-      data: { total_pallet: vendorTotals.totalPallet, total_item: vendorTotals.totalItem }
+      data: {
+        total_pallet: vendorTotals.totalPallet,
+        total_item: vendorTotals.totalItem,
+      },
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2391,7 +2440,7 @@ router.put("/vendors/:vendorId/recalculate-totals", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to recalculate totals",
-      error: error.message
+      error: error.message,
     });
   } finally {
     client.release();
@@ -2414,12 +2463,14 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       LEFT JOIN vendor_detail vd ON vd.id = osv.vendor_id
       LEFT JOIN oversea_schedules os ON os.id = osv.oversea_schedule_id
       WHERE osv.id = $1 AND osv.is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     if (vendorCheck.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Vendor not found" });
     }
 
     const vendor = vendorCheck.rows[0];
@@ -2442,7 +2493,10 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
     let approveById = null;
     if (approveByName) {
-      const empResult = await client.query(`SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`, [approveByName]);
+      const empResult = await client.query(
+        `SELECT id FROM employees WHERE emp_name = $1 LIMIT 1`,
+        [approveByName],
+      );
       if (empResult.rowCount > 0) approveById = empResult.rows[0].id;
     }
 
@@ -2455,13 +2509,13 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       LEFT JOIN kanban_master km ON km.part_code = osp.part_code AND km.is_active = true
       WHERE osp.oversea_schedule_vendor_id = $1 AND osp.is_active = true
       ORDER BY osp.id ASC`,
-      [vendorId]
+      [vendorId],
     );
 
     const qcChecksResult = await client.query(
       `SELECT part_code, TO_CHAR(production_date, 'YYYY-MM-DD') as production_date, status
        FROM qc_checks
-       WHERE status = 'Complete' AND is_active = true`
+       WHERE status = 'Complete' AND is_active = true`,
     );
     const qcChecks = qcChecksResult.rows;
 
@@ -2472,27 +2526,28 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         (qc) =>
           qc.part_code === partCode &&
           qc.production_date === normalizedProdDate &&
-          qc.status === "Complete"
+          qc.status === "Complete",
       );
     };
 
     for (const part of partsResult.rows) {
-      const prodDates = typeof part.prod_dates === 'string'
-        ? JSON.parse(part.prod_dates)
-        : Array.isArray(part.prod_dates)
-          ? part.prod_dates
-          : [];
+      const prodDates =
+        typeof part.prod_dates === "string"
+          ? JSON.parse(part.prod_dates)
+          : Array.isArray(part.prod_dates)
+            ? part.prod_dates
+            : [];
 
       if (prodDates.length > 0) {
         const incompleteDates = prodDates.filter(
-          (date) => !isProductionDateComplete(part.part_code, date)
+          (date) => !isProductionDateComplete(part.part_code, date),
         );
 
         await client.query(
           `UPDATE oversea_schedule_parts 
            SET sample_dates = $1::jsonb 
            WHERE id = $2`,
-          [JSON.stringify(incompleteDates), part.id]
+          [JSON.stringify(incompleteDates), part.id],
         );
 
         for (const date of incompleteDates) {
@@ -2502,12 +2557,12 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
              AND production_date = $2::date 
              AND is_active = true
              LIMIT 1`,
-            [part.part_code, date]
+            [part.part_code, date],
           );
 
           if (existingCheck.rowCount > 0) {
             const currentStatus = existingCheck.rows[0].status;
-            if (currentStatus !== 'Complete') {
+            if (currentStatus !== "Complete") {
               await client.query(
                 `UPDATE qc_checks 
                  SET status = $2,
@@ -2517,7 +2572,13 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
                      created_by = $5,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $1`,
-                [existingCheck.rows[0].id, 'M136 Part', vendorId, part.id, approveByName || 'System']
+                [
+                  existingCheck.rows[0].id,
+                  "M136 Part",
+                  vendorId,
+                  part.id,
+                  approveByName || "System",
+                ],
               );
             }
           } else {
@@ -2532,12 +2593,12 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
                 part.part_name,
                 vendor.vendor_name,
                 date,
-                'M136',
-                'M136 Part',  
+                "M136",
+                "M136 Part",
                 vendorId,
                 part.id,
-                approveByName || 'System'
-              ]
+                approveByName || "System",
+              ],
             );
           }
         }
@@ -2552,31 +2613,43 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         if (part.kanban_master_id) {
           const stockQuery = await client.query(
             `SELECT stock_m101, stock_m136, stock_off_system, stock_rtv FROM kanban_master WHERE id = $1`,
-            [part.kanban_master_id]
+            [part.kanban_master_id],
           );
           if (stockQuery.rows[0]) {
             const stockRow = stockQuery.rows[0];
-            if (finalStockLevel === "M101") quantityBefore = parseInt(stockRow.stock_m101) || 0;
-            else if (finalStockLevel === "M136") quantityBefore = parseInt(stockRow.stock_m136) || 0;
-            else if (finalStockLevel === "Off System") quantityBefore = parseInt(stockRow.stock_off_system) || 0;
-            else if (finalStockLevel === "RTV") quantityBefore = parseInt(stockRow.stock_rtv) || 0;
+            if (finalStockLevel === "M101")
+              quantityBefore = parseInt(stockRow.stock_m101) || 0;
+            else if (finalStockLevel === "M136")
+              quantityBefore = parseInt(stockRow.stock_m136) || 0;
+            else if (finalStockLevel === "Off System")
+              quantityBefore = parseInt(stockRow.stock_off_system) || 0;
+            else if (finalStockLevel === "RTV")
+              quantityBefore = parseInt(stockRow.stock_rtv) || 0;
           }
         }
 
         const quantityAfter = quantityBefore + qty;
 
-
-        const rawProdDatesOsea = typeof part.prod_dates === "string"
-          ? JSON.parse(part.prod_dates)
-          : Array.isArray(part.prod_dates) ? part.prod_dates : [];
-        const productionDatesTextOsea = rawProdDatesOsea.length > 0
-          ? rawProdDatesOsea.map((d) => {
-              const [y, m, day] = String(d).split("T")[0].split("-");
-              return `${day}/${m}/${y}`;
-            }).join(", ")
-          : (part.prod_date
-              ? (() => { const [y, m, day] = part.prod_date.split("-"); return `${day}/${m}/${y}`; })()
-              : null);
+        const rawProdDatesOsea =
+          typeof part.prod_dates === "string"
+            ? JSON.parse(part.prod_dates)
+            : Array.isArray(part.prod_dates)
+              ? part.prod_dates
+              : [];
+        const productionDatesTextOsea =
+          rawProdDatesOsea.length > 0
+            ? rawProdDatesOsea
+                .map((d) => {
+                  const [y, m, day] = String(d).split("T")[0].split("-");
+                  return `${day}/${m}/${y}`;
+                })
+                .join(", ")
+            : part.prod_date
+              ? (() => {
+                  const [y, m, day] = part.prod_date.split("-");
+                  return `${day}/${m}/${y}`;
+                })()
+              : null;
 
         const movementResult = await client.query(
           `INSERT INTO stock_movements (part_id, part_code, part_name, movement_type, stock_level,
@@ -2584,11 +2657,25 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
             model, production_date, production_dates, remark, moved_by, moved_by_name, moved_at, is_active)
            VALUES ($1, $2, $3, 'IN', $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13, $14, $15, $16, CURRENT_TIMESTAMP, true)
            RETURNING id`,
-          [part.kanban_master_id, part.part_code, part.part_name, finalStockLevel, qty, quantityBefore, quantityAfter,
-            "oversea_schedule", vendorId, part.do_number || vendor.do_number, part.model || modelName,
-          part.prod_date || null, productionDatesTextOsea,
-          part.remark || `Approved from oversea vendor: ${vendor.vendor_name || "Unknown"}`,
-            approveById, approveByName || null]
+          [
+            part.kanban_master_id,
+            part.part_code,
+            part.part_name,
+            finalStockLevel,
+            qty,
+            quantityBefore,
+            quantityAfter,
+            "oversea_schedule",
+            vendorId,
+            part.do_number || vendor.do_number,
+            part.model || modelName,
+            part.prod_date || null,
+            productionDatesTextOsea,
+            part.remark ||
+              `Approved from oversea vendor: ${vendor.vendor_name || "Unknown"}`,
+            approveById,
+            approveByName || null,
+          ],
         );
 
         if (part.kanban_master_id) {
@@ -2599,11 +2686,17 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
           await client.query(
             `UPDATE kanban_master SET ${updateColumn} = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-            [quantityAfter, part.kanban_master_id]
+            [quantityAfter, part.kanban_master_id],
           );
         }
 
-        stockResults.push({ part_code: part.part_code, movement_id: movementResult.rows[0].id, quantity_added: qty, stock_before: quantityBefore, stock_after: quantityAfter });
+        stockResults.push({
+          part_code: part.part_code,
+          movement_id: movementResult.rows[0].id,
+          quantity_added: qty,
+          stock_before: quantityBefore,
+          stock_after: quantityAfter,
+        });
       }
     }
 
@@ -2611,14 +2704,14 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       `UPDATE oversea_schedule_vendors 
        SET status = 'IQC Progress', approve_by = $2, approve_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $1 AND is_active = true RETURNING id, oversea_schedule_id, status, approve_by, approve_at`,
-      [vendorId, approveById]
+      [vendorId, approveById],
     );
 
     await client.query(
       `UPDATE oversea_schedule_parts
        SET status = 'IQC Progress', updated_at = CURRENT_TIMESTAMP
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     await updateVendorTotals(client, vendorId);
@@ -2626,14 +2719,14 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     const allVendorsCheck = await client.query(
       `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'IQC Progress' THEN 1 ELSE 0 END) as matched_count
        FROM oversea_schedule_vendors WHERE oversea_schedule_id = $1 AND is_active = true`,
-      [scheduleId]
+      [scheduleId],
     );
 
     const { total, matched_count } = allVendorsCheck.rows[0];
     if (parseInt(total) > 0 && parseInt(total) === parseInt(matched_count)) {
       await client.query(
         `UPDATE oversea_schedules SET status = 'IQC Progress', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND is_active = true`,
-        [scheduleId]
+        [scheduleId],
       );
     }
 
@@ -2643,7 +2736,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       `SELECT COALESCE(sample_dates::jsonb, '[]'::jsonb) as sample_dates
        FROM oversea_schedule_parts
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     let allPartsPass = true;
@@ -2656,20 +2749,22 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
     }
 
     if (allPartsPass && allPartsPassCheck.rowCount > 0) {
-      console.log(`[Approve Vendor] All parts PASS! Moving vendor ${vendorId} directly to Pass`);
+      console.log(
+        `[Approve Vendor] All parts PASS! Moving vendor ${vendorId} directly to Pass`,
+      );
 
       await client.query(
         `UPDATE oversea_schedule_vendors 
          SET status = 'Pass', updated_at = CURRENT_TIMESTAMP 
          WHERE id = $1 AND is_active = true`,
-        [vendorId]
+        [vendorId],
       );
 
       await client.query(
         `UPDATE oversea_schedule_parts
          SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
          WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-        [vendorId]
+        [vendorId],
       );
 
       const allVendorsPassCheck = await client.query(
@@ -2677,63 +2772,66 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
                 SUM(CASE WHEN status = 'Pass' THEN 1 ELSE 0 END) as pass_count
          FROM oversea_schedule_vendors 
          WHERE oversea_schedule_id = $1 AND is_active = true`,
-        [scheduleId]
+        [scheduleId],
       );
 
       const { total: totalVendors, pass_count } = allVendorsPassCheck.rows[0];
-      if (parseInt(totalVendors) > 0 && parseInt(totalVendors) === parseInt(pass_count)) {
+      if (
+        parseInt(totalVendors) > 0 &&
+        parseInt(totalVendors) === parseInt(pass_count)
+      ) {
         await client.query(
           `UPDATE oversea_schedules 
            SET status = 'Pass', updated_at = CURRENT_TIMESTAMP 
            WHERE id = $1 AND is_active = true`,
-          [scheduleId]
+          [scheduleId],
         );
-        console.log(`[Approve Vendor] All vendors Pass! Schedule ${scheduleId} moved to Pass`);
+        console.log(
+          `[Approve Vendor] All vendors Pass! Schedule ${scheduleId} moved to Pass`,
+        );
       }
     }
 
-
     const today = new Date();
     const yy = String(today.getFullYear()).slice(-2);
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
     const datePrefix = yy + mm + dd;
 
     for (const part of partsResult.rows) {
       const qtyBox = parseInt(part.quantity_box) || 0;
       if (qtyBox <= 0) continue;
 
-
       let partId = part.kanban_master_id;
       if (!partId) {
         const partIdRes = await client.query(
           `SELECT id FROM kanban_master WHERE part_code = $1 AND is_active = true LIMIT 1`,
-          [part.part_code]
+          [part.part_code],
         );
         if (partIdRes.rowCount > 0) {
           partId = partIdRes.rows[0].id;
         } else {
-          console.warn(`[Approve] No kanban_master_id for part ${part.part_code}, skipping storage inventory`);
+          console.warn(
+            `[Approve] No kanban_master_id for part ${part.part_code}, skipping storage inventory`,
+          );
           continue;
         }
       }
 
-
       let qtyPerBoxMaster = 1;
       const masterRes = await client.query(
         `SELECT qty_per_box FROM kanban_master WHERE id = $1`,
-        [partId]
+        [partId],
       );
       if (masterRes.rowCount > 0 && masterRes.rows[0].qty_per_box > 0) {
         qtyPerBoxMaster = masterRes.rows[0].qty_per_box;
       }
 
-
       const seqRes = await client.query(
         `SELECT COALESCE(MAX(CAST(SUBSTRING(label_id, 13) AS INTEGER)), 0) as max_seq
          FROM storage_inventory
          WHERE part_id = $1`,
-        [partId]
+        [partId],
       );
       let nextSeq = seqRes.rows[0].max_seq;
 
@@ -2741,19 +2839,16 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
 
       for (let i = 1; i <= qtyBox; i++) {
         nextSeq++;
-        const seqStr = String(nextSeq).padStart(6, '0');
+        const seqStr = String(nextSeq).padStart(6, "0");
         const labelId = datePrefix + partId + seqStr;
-
 
         let boxQty;
         if (i < qtyBox) {
           boxQty = qtyPerBoxMaster;
         } else {
-
-          boxQty = totalQty - (qtyPerBoxMaster * (qtyBox - 1));
+          boxQty = totalQty - qtyPerBoxMaster * (qtyBox - 1);
           if (boxQty < 0) boxQty = 0;
         }
-
 
         await client.query(
           `INSERT INTO storage_inventory (
@@ -2770,18 +2865,17 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
             vendor.vendor_id,
             vendor.vendor_name,
             part.model || vendor.model_name,
-            'M136',
+            "M136",
             vendor.schedule_date_ref,
             approveById,
-            approveByName
-          ]
+            approveByName,
+          ],
         );
       }
     }
 
-    const finalVendorStatus = allPartsPass && allPartsPassCheck.rowCount > 0
-      ? 'Pass'
-      : 'IQC Progress';
+    const finalVendorStatus =
+      allPartsPass && allPartsPassCheck.rowCount > 0 ? "Pass" : "IQC Progress";
 
     await client.query("COMMIT");
     res.json({
@@ -2790,18 +2884,19 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       data: {
         vendor: { ...vendorResult.rows[0], status: finalVendorStatus },
         stockLevel: finalStockLevel,
-        stockMovements: stockResults
-      }
+        stockMovements: stockResults,
+      },
     });
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("[APPROVE Vendor] Error:", error);
-    res.status(500).json({ success: false, message: "Failed to approve vendor" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to approve vendor" });
   } finally {
     client.release();
   }
 });
-
 
 router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
   const client = await pool.connect();
@@ -2810,7 +2905,6 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
     const { moveByName } = req.body;
 
     await client.query("BEGIN");
-
 
     let sampleById = null;
     if (moveByName) {
@@ -2822,7 +2916,6 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
         sampleById = empResult.rows[0].id;
       }
     }
-
 
     const vendorResult = await client.query(
       `UPDATE oversea_schedule_vendors 
@@ -2845,12 +2938,11 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
 
     const scheduleId = vendorResult.rows[0].oversea_schedule_id;
 
-
     await client.query(
       `UPDATE oversea_schedule_parts
        SET status = 'Pass', updated_at = CURRENT_TIMESTAMP
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     await updateVendorTotals(client, vendorId);
@@ -2876,7 +2968,6 @@ router.put("/vendors/:vendorId/move-to-sample", async (req, res) => {
   }
 });
 
-
 router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2884,7 +2975,6 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
     const { moveByName } = req.body;
 
     await client.query("BEGIN");
-
 
     let completeById = null;
     if (moveByName) {
@@ -2896,7 +2986,6 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
         completeById = empResult.rows[0].id;
       }
     }
-
 
     const vendorResult = await client.query(
       `UPDATE oversea_schedule_vendors 
@@ -2919,24 +3008,23 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
 
     const scheduleId = vendorResult.rows[0].oversea_schedule_id;
 
-
     await client.query(
       `UPDATE oversea_schedule_parts
        SET status = 'Complete', updated_at = CURRENT_TIMESTAMP
        WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
-      [vendorId]
+      [vendorId],
     );
 
     const allVendorsCompleteCheck = await client.query(
       `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'Complete' THEN 1 ELSE 0 END) as complete_count
        FROM oversea_schedule_vendors WHERE oversea_schedule_id = $1 AND is_active = true`,
-      [scheduleId]
+      [scheduleId],
     );
     const { total: totalV, complete_count } = allVendorsCompleteCheck.rows[0];
     if (parseInt(totalV) > 0 && parseInt(totalV) === parseInt(complete_count)) {
       await client.query(
         `UPDATE oversea_schedules SET status = 'Complete', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND is_active = true`,
-        [scheduleId]
+        [scheduleId],
       );
     }
 
@@ -2963,7 +3051,6 @@ router.put("/vendors/:vendorId/move-to-complete", async (req, res) => {
   }
 });
 
-
 router.put("/:id", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2976,11 +3063,26 @@ router.put("/:id", async (req, res) => {
     const params = [];
     let paramCount = 0;
 
-    if (stockLevel !== undefined) { paramCount++; updates.push(`stock_level = $${paramCount}`); params.push(stockLevel); }
-    if (modelName !== undefined) { paramCount++; updates.push(`model_name = $${paramCount}`); params.push(modelName); }
-    if (scheduleDate !== undefined) { paramCount++; updates.push(`schedule_date = $${paramCount}::date`); params.push(scheduleDate); }
+    if (stockLevel !== undefined) {
+      paramCount++;
+      updates.push(`stock_level = $${paramCount}`);
+      params.push(stockLevel);
+    }
+    if (modelName !== undefined) {
+      paramCount++;
+      updates.push(`model_name = $${paramCount}`);
+      params.push(modelName);
+    }
+    if (scheduleDate !== undefined) {
+      paramCount++;
+      updates.push(`schedule_date = $${paramCount}::date`);
+      params.push(scheduleDate);
+    }
 
-    if (updates.length === 0) return res.status(400).json({ success: false, message: "No fields to update" });
+    if (updates.length === 0)
+      return res
+        .status(400)
+        .json({ success: false, message: "No fields to update" });
 
     paramCount++;
     params.push(id);
@@ -2989,12 +3091,14 @@ router.put("/:id", async (req, res) => {
       `UPDATE oversea_schedules SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $${paramCount} AND is_active = true
        RETURNING id, schedule_code, stock_level, model_name, TO_CHAR(schedule_date, 'YYYY-MM-DD') as schedule_date, status`,
-      params
+      params,
     );
 
     if (result.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Schedule not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Schedule not found" });
     }
 
     await client.query("COMMIT");
@@ -3002,7 +3106,69 @@ router.put("/:id", async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("[Update Schedule] Error:", error);
-    res.status(500).json({ success: false, message: "Failed to update schedule" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to update schedule" });
+  } finally {
+    client.release();
+  }
+});
+
+router.put("/vendors/:vendorId/return", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { vendorId } = req.params;
+    await client.query("BEGIN");
+
+    const vendorCheck = await client.query(
+      `SELECT id, oversea_schedule_id FROM oversea_schedule_vendors
+       WHERE id = $1 AND is_active = true`,
+      [vendorId],
+    );
+    if (vendorCheck.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res
+        .status(404)
+        .json({ success: false, message: "Vendor not found" });
+    }
+
+    const scheduleId = vendorCheck.rows[0].oversea_schedule_id;
+
+    const vendorResult = await client.query(
+      `UPDATE oversea_schedule_vendors
+       SET status = 'Schedule', move_by = NULL, move_at = NULL,
+           schedule_date_ref = NULL, stock_level_ref = NULL, model_name_ref = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND is_active = true
+       RETURNING id, oversea_schedule_id, status`,
+      [vendorId],
+    );
+
+    await client.query(
+      `UPDATE oversea_schedule_parts
+       SET status = 'Schedule', updated_at = CURRENT_TIMESTAMP
+       WHERE oversea_schedule_vendor_id = $1 AND is_active = true`,
+      [vendorId],
+    );
+
+    await client.query(
+      `UPDATE oversea_schedules
+       SET status = 'Schedule', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND is_active = true`,
+      [scheduleId],
+    );
+
+    await client.query("COMMIT");
+    res.json({
+      success: true,
+      message: "Schedule returned to Schedule tab",
+      data: { vendor: vendorResult.rows[0], scheduleId },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to return schedule" });
   } finally {
     client.release();
   }

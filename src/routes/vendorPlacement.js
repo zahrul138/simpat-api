@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-// GET all vendor placements
 router.get('/', async (req, res) => {
   try {
     const result = await db.query(`
@@ -14,6 +13,7 @@ router.get('/', async (req, res) => {
         height_cm,
         is_active,
         created_by,
+        COALESCE(total_parts, 0) as total_parts,
         TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') as created_at_formatted,
         TO_CHAR(updated_at, 'DD/MM/YYYY HH24:MI') as updated_at_formatted
       FROM vendor_placement 
@@ -35,7 +35,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET single vendor placement by ID
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -65,7 +64,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// POST create new vendor placement
 router.post('/', async (req, res) => {
   try {
     const {
@@ -77,7 +75,6 @@ router.post('/', async (req, res) => {
       created_by
     } = req.body;
 
-    // Validasi input
     if (!placement_name || !length_cm || !width_cm || !height_cm) {
       return res.status(400).json({
         success: false,
@@ -85,7 +82,6 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Validasi numeric
     if (isNaN(parseFloat(length_cm)) || isNaN(parseFloat(width_cm)) || isNaN(parseFloat(height_cm))) {
       return res.status(400).json({
         success: false,
@@ -93,7 +89,6 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Validasi positive values
     if (parseFloat(length_cm) <= 0 || parseFloat(width_cm) <= 0 || parseFloat(height_cm) <= 0) {
       return res.status(400).json({
         success: false,
@@ -101,7 +96,6 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Cek duplikasi placement name
     const duplicateCheck = await db.query(
       `SELECT id FROM vendor_placement WHERE LOWER(placement_name) = LOWER($1)`,
       [placement_name]
@@ -114,7 +108,6 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Insert data
     const result = await db.query(
       `INSERT INTO vendor_placement (
         placement_name,
@@ -143,13 +136,12 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('Error creating vendor placement:', error);
     
-    // Handle PostgreSQL errors
-    if (error.code === '23505') { // unique violation
+    if (error.code === '23505') { 
       return res.status(409).json({
         success: false,
         message: 'Placement name already exists'
       });
-    } else if (error.code === '23514') { // check violation
+    } else if (error.code === '23514') { 
       return res.status(400).json({
         success: false,
         message: 'Invalid dimension values (must be positive)'
@@ -164,7 +156,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT update vendor placement
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -177,7 +168,6 @@ router.put('/:id', async (req, res) => {
       updated_by
     } = req.body;
 
-    // Cek apakah data exist
     const checkExist = await db.query(
       `SELECT id FROM vendor_placement WHERE id = $1`,
       [id]
@@ -190,7 +180,6 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    // Update data
     const result = await db.query(
       `UPDATE vendor_placement SET
         placement_name = COALESCE($1, placement_name),
@@ -228,7 +217,6 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE vendor placement (soft delete)
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -343,7 +331,7 @@ router.delete('/permanent/:id', async (req, res) => {
     if (error.code === '23503') {
       return res.status(400).json({
         success: false,
-        message: 'Cannot delete placement because it is referenced by other records'
+        message: 'Please move spare parts to another placement first'
       });
     }
     
@@ -355,20 +343,16 @@ router.delete('/permanent/:id', async (req, res) => {
   }
 });
 
-// PUT /api/vendors/sync-total-parts - Sync total_parts for all vendors
 router.put("/sync-total-parts", async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-
-    // Reset semua total_parts ke 0
     await client.query(`
       UPDATE vendor_detail 
       SET total_parts = 0,
           updated_at = CURRENT_TIMESTAMP
     `);
 
-    // Hitung ulang total_parts dari kanban_master
     const updateQuery = `
       UPDATE vendor_detail vd
       SET total_parts = (
@@ -388,7 +372,7 @@ router.put("/sync-total-parts", async (req, res) => {
 
     await client.query("COMMIT");
 
-    // Get updated data
+  
     const vendorsQuery = await client.query(`
       SELECT id, vendor_name, total_parts 
       FROM vendor_detail 

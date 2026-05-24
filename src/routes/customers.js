@@ -1,9 +1,7 @@
-// src/routes/customers.js
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 
-// GET /api/customers/active-minimal
 router.get('/active-minimal', async (req, res, next) => {
   try {
     const q = `
@@ -26,7 +24,6 @@ router.get('/active-minimal', async (req, res, next) => {
   }
 });
 
-// PUT /api/customers/:id/increment-special-parts
 router.put("/:id/increment-special-parts", async (req, res) => {
   try {
     const { id } = req.params;
@@ -39,7 +36,6 @@ router.put("/:id/increment-special-parts", async (req, res) => {
       RETURNING id, cust_name, total_special_parts
     `;
 
-    // PERBAIKAN: Gunakan pool, bukan client
     const { rows } = await pool.query(updateQuery, [id]);
 
     if (rows.length === 0) {

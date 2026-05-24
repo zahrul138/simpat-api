@@ -32,9 +32,9 @@ router.post("/", async (req, res) => {
 
     const ins = await client.query(
       `INSERT INTO local_schedules
-    (stock_level, model_name, upload_by, schedule_date, total_vendor, total_pallet, total_item, status)
-   VALUES ($1,$2,$3,$4::date,0,0,0,'New')
-   RETURNING id, schedule_code, stock_level, model_name, upload_by, 
+      (stock_level, model_name, upload_by, schedule_date, total_vendor, total_pallet, total_item, status)
+      VALUES ($1,$2,$3,$4::date,0,0,0,'New')
+      RETURNING id, schedule_code, stock_level, model_name, upload_by, 
              TO_CHAR(schedule_date, 'YYYY-MM-DD') as schedule_date,
              total_vendor, total_pallet, total_item, status, created_at, updated_at, is_active`,
       [stockLevel, modelName, uploadBy, scheduleDate],
@@ -1043,7 +1043,6 @@ router.put("/parts/:id", async (req, res) => {
       approve_by_id,
     } = req.body;
 
-    // Fetch current part data before update (needed for sync logic)
     const preUpdateRes = await client.query(
       `SELECT lsp.id, lsp.local_schedule_vendor_id, lsp.prod_dates, lsp.sample_dates,
               lsp.part_code, lsp.part_name, lsv.status as vendor_status
@@ -1154,7 +1153,6 @@ router.put("/parts/:id", async (req, res) => {
         ? updatedPart.prod_dates
         : (typeof updatedPart.prod_dates === 'string' ? JSON.parse(updatedPart.prod_dates || '[]') : []);
 
-      // Use pre-update values fetched before the UPDATE ran
       const rawSample = preUpdatePart.sample_dates;
       const partCode = preUpdatePart.part_code;
       const partName = preUpdatePart.part_name;
@@ -1170,7 +1168,6 @@ router.put("/parts/:id", async (req, res) => {
       const removedSampleDates = oldSampleDates.filter(d => !newProdDates.includes(d));
       const addedDates = newProdDates.filter(d => !prevProdDates.includes(d));
 
-      // Fetch vendor_name via vendor_detail join
       const vendorNameRes = await client.query(
         `SELECT vd.vendor_name FROM local_schedule_vendors lsv
          JOIN vendor_detail vd ON vd.id = lsv.vendor_id
@@ -1179,7 +1176,6 @@ router.put("/parts/:id", async (req, res) => {
       );
       const vendorName = vendorNameRes.rows[0]?.vendor_name || '';
 
-      // --- Handle REMOVED sample dates ---
       if (removedSampleDates.length > 0) {
         for (const removedDate of removedSampleDates) {
           await client.query(
@@ -1195,7 +1191,6 @@ router.put("/parts/:id", async (req, res) => {
         }
       }
 
-      // --- Handle ADDED dates: check if they need a QC check ---
       const addedSampleDates = [];
       for (const addedDate of addedDates) {
         const dateStr = String(addedDate).split('T')[0];
@@ -1256,8 +1251,6 @@ router.put("/parts/:id", async (req, res) => {
           }
         }
       }
-
-      // --- Recompute sample_dates ---
       const updatedSampleDates = [
         ...oldSampleDates.filter(d => !removedSampleDates.includes(d)),
         ...addedSampleDates
@@ -1268,8 +1261,6 @@ router.put("/parts/:id", async (req, res) => {
          WHERE id = $2`,
         [JSON.stringify(updatedSampleDates), id]
       );
-
-      // --- Update part status based on vendor status ---
       const vendorStatus = preUpdatePart.vendor_status || 'IQC Progress';
       const statusWhenSample = ['Today', 'Received', 'Pass', 'Complete', 'IQC Progress', 'Schedule', 'New'].includes(vendorStatus) ? vendorStatus : 'IQC Progress';
       if (updatedSampleDates.length === 0 && newProdDates.length > 0) {
@@ -1654,9 +1645,9 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         );
         if (stockQuery.rows[0]) {
           const sr = stockQuery.rows[0];
-          if (finalStockLevel === "M101")       quantityBefore = parseInt(sr.stock_m101) || 0;
-          else if (finalStockLevel === "M136")  quantityBefore = parseInt(sr.stock_m136) || 0;
-          else if (finalStockLevel === "RTV")   quantityBefore = parseInt(sr.stock_rtv) || 0;
+          if (finalStockLevel === "M101") quantityBefore = parseInt(sr.stock_m101) || 0;
+          else if (finalStockLevel === "M136") quantityBefore = parseInt(sr.stock_m136) || 0;
+          else if (finalStockLevel === "RTV") quantityBefore = parseInt(sr.stock_rtv) || 0;
         }
       }
 
@@ -1667,12 +1658,12 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
         : Array.isArray(part.prod_dates) ? part.prod_dates : [];
       const productionDatesText = rawProdDates.length > 0
         ? rawProdDates.map((d) => {
-            const [y, m, day] = String(d).split("T")[0].split("-");
-            return `${day}/${m}/${y}`;
-          }).join(", ")
+          const [y, m, day] = String(d).split("T")[0].split("-");
+          return `${day}/${m}/${y}`;
+        }).join(", ")
         : (part.prod_date
-            ? (() => { const [y, m, day] = part.prod_date.split("-"); return `${day}/${m}/${y}`; })()
-            : null);
+          ? (() => { const [y, m, day] = part.prod_date.split("-"); return `${day}/${m}/${y}`; })()
+          : null);
 
       const movementResult = await client.query(
         `INSERT INTO stock_movements (
@@ -1707,7 +1698,7 @@ router.put("/vendors/:vendorId/approve", async (req, res) => {
       if (part.kanban_master_id) {
 
         let updateColumn = "stock_m101";
-        if (finalStockLevel === "M136")     updateColumn = "stock_m136";
+        if (finalStockLevel === "M136") updateColumn = "stock_m136";
         else if (finalStockLevel === "RTV") updateColumn = "stock_rtv";
 
         await client.query(

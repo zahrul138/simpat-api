@@ -54,9 +54,9 @@ router.post("/", async (req, res) => {
     const {
       lineCode,
       shiftTime,
-      targetDate, // "YYYY-MM-DD"
+      targetDate, 
       createdBy,
-      details, // array of items (customerName/materialCode atau customerId/partId)
+      details,
     } = req.body || {};
 
     console.log("Received POST /api/production-schedules:", {
@@ -153,7 +153,7 @@ router.post("/", async (req, res) => {
       resolved.push({
         production_schedule_id: scheduleId,
         customer_id: customerId,
-        material_code: materialCode, // GANTI: part_id -> material_code
+        material_code: materialCode,
         input_quantity: Number(d.inputQuantity ?? d.input ?? 0) || 0,
         pallet_type: palletType,
         is_auto_split: Boolean(d.isAutoSplit ?? false),

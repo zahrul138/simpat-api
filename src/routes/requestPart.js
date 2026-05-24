@@ -231,8 +231,8 @@ router.delete("/:id", async (req, res) => {
     await client.query("BEGIN");
 
     const partQuery = await client.query(
-      `SELECT status FROM request_parts 
-       WHERE id = $1`,   // tidak perlu filter is_active karena akan dihapus fisik
+      `SELECT status, storage_inventory_id, part_code, qty_requested
+       FROM request_parts WHERE id = $1`,
       [id]
     );
 
@@ -241,14 +241,39 @@ router.delete("/:id", async (req, res) => {
       return res.status(404).json({ success: false, message: "Part enquiry not found" });
     }
 
-    const { status } = partQuery.rows[0];
+    const { status, storage_inventory_id, part_code, qty_requested } = partQuery.rows[0];
 
     if (!['New', 'Rejected', 'Received'].includes(status)) {
       await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
-        message: "Cannot delete item with status other than New/Rejected"
+        message: "Cannot delete item with status other than New/Rejected/Received"
       });
+    }
+
+    if (status === 'Received') {
+      if (storage_inventory_id) {
+        await client.query(
+          `UPDATE storage_inventory
+           SET status_tab = 'M136 System',
+               moved_by_name = NULL,
+               moved_at = NULL,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [storage_inventory_id]
+        );
+      }
+
+      if (part_code && qty_requested) {
+        await client.query(
+          `UPDATE kanban_master
+           SET stock_m136 = stock_m136 + $1,
+               stock_m101 = GREATEST(stock_m101 - $1, 0),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE part_code = $2 AND is_active = true`,
+          [parseInt(qty_requested), part_code]
+        );
+      }
     }
 
     const deleteResult = await client.query(

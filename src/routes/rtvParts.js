@@ -1,4 +1,3 @@
-// routes/rtvParts.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
@@ -41,9 +40,6 @@ const pool = require("../db");
   ALTER TABLE storage_inventory ADD COLUMN IF NOT EXISTS remark VARCHAR(255) DEFAULT NULL;
 */
 
-// ════════════════════════════════════════════════════════════════════════════
-// GET /api/rtv-parts
-// ════════════════════════════════════════════════════════════════════════════
 router.get("/", async (req, res) => {
   try {
     const { status, part_code, date_from, date_to } = req.query;
@@ -108,9 +104,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// POST /api/rtv-parts/:id/receive  →  Waiting LOG → Received LOG
-// ════════════════════════════════════════════════════════════════════════════
 router.post("/:id/receive", async (req, res) => {
   try {
     const { id } = req.params;
@@ -145,10 +138,6 @@ router.post("/:id/receive", async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// POST /api/rtv-parts/:id/progress  →  Received LOG → RTV Progress
-// Stock: OUT M101 → IN RTV
-// ════════════════════════════════════════════════════════════════════════════
 router.post("/:id/progress", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -166,8 +155,6 @@ router.post("/:id/progress", async (req, res) => {
     const qty = Number(row.qty_return);
     const sourceLevel = (row.stock_level || "M101").toUpperCase();
     const sourceColumn = sourceLevel === "M136" ? "stock_m136" : "stock_m101";
-
-    // Lookup kanban_master
     const kmResult = await client.query(
       `SELECT id, part_name, model, stock_m101, stock_m136, COALESCE(stock_rtv, 0) AS stock_rtv
        FROM kanban_master WHERE part_code = $1 AND is_active = TRUE LIMIT 1`,
@@ -180,7 +167,6 @@ router.post("/:id/progress", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Update rtv_parts
     await client.query(
       `UPDATE rtv_parts
        SET status = 'RTV Progress',
@@ -191,21 +177,17 @@ router.post("/:id/progress", async (req, res) => {
       [progress_by_name || null, id]
     );
 
-    // Update return_parts.rtv_tab_status
     await client.query(
       `UPDATE return_parts SET rtv_tab_status = 'RTV Progress', updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`, [row.return_parts_id]
     );
 
-    // Stock movements: OUT M101 → IN RTV
     if (kmResult.rows.length > 0) {
       const km = kmResult.rows[0];
       const currentSource = Number(sourceColumn === "stock_m101" ? km.stock_m101 : km.stock_m136) || 0;
       const sourceAfter   = Math.max(0, currentSource - qty);
       const currentRtv    = Number(km.stock_rtv) || 0;
       const rtvAfter      = currentRtv + qty;
-
-      // Update kanban_master
       await client.query(
         `UPDATE kanban_master
          SET ${sourceColumn} = $1,
@@ -215,7 +197,6 @@ router.post("/:id/progress", async (req, res) => {
         [sourceAfter, rtvAfter, km.id]
       );
 
-      // OUT from M101/M136
       await client.query(
         `INSERT INTO stock_movements (
            part_id, part_code, part_name, movement_type, stock_level,
@@ -231,7 +212,6 @@ router.post("/:id/progress", async (req, res) => {
         ]
       );
 
-      // IN to RTV
       await client.query(
         `INSERT INTO stock_movements (
            part_id, part_code, part_name, movement_type, stock_level,
@@ -259,11 +239,6 @@ router.post("/:id/progress", async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// POST /api/rtv-parts/:id/replace  →  RTV Progress → Stock Replaced
-// Stock: OUT RTV → IN Off System + INSERT storage_inventory (remark='RTV')
-// Generate label_id lanjutan dari part_code yang sama
-// ════════════════════════════════════════════════════════════════════════════
 router.post("/:id/replace", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -280,7 +255,6 @@ router.post("/:id/replace", async (req, res) => {
     const row = origResult.rows[0];
     const qty = Number(row.qty_return);
 
-    // Lookup kanban_master
     const kmResult = await client.query(
       `SELECT id, part_name, model, COALESCE(stock_rtv, 0) AS stock_rtv,
               COALESCE(stock_off_system, 0) AS stock_off_system
@@ -288,7 +262,6 @@ router.post("/:id/replace", async (req, res) => {
       [row.part_code]
     );
 
-    // Generate label_id - lanjutkan dari yang sudah ada untuk part_code ini
     const lastLabelResult = await client.query(
       `SELECT label_id FROM storage_inventory
        WHERE part_code = $1 AND is_active = TRUE AND label_id IS NOT NULL
@@ -315,7 +288,6 @@ router.post("/:id/replace", async (req, res) => {
       newLabelId = `RTV-${row.part_code}-000001`;
     }
 
-    // Lookup part_id from kanban_master (used as part_id in storage_inventory)
     const partIdResult = await client.query(
       `SELECT id FROM kanban_master WHERE part_code = $1 AND is_active = TRUE LIMIT 1`,
       [row.part_code]
@@ -327,8 +299,6 @@ router.post("/:id/replace", async (req, res) => {
       : null;
 
     await client.query("BEGIN");
-
-    // Insert into storage_inventory (Off System, remark='RTV')
     const siResult = await client.query(
       `INSERT INTO storage_inventory (
          label_id, part_id, part_code, part_name, qty, vendor_name, model,
@@ -343,8 +313,6 @@ router.post("/:id/replace", async (req, res) => {
       ]
     );
     const newStorageId = siResult.rows[0].id;
-
-    // Update rtv_parts
     await client.query(
       `UPDATE rtv_parts
        SET status = 'Stock Replaced',
@@ -357,13 +325,11 @@ router.post("/:id/replace", async (req, res) => {
       [replaced_by_name || null, newStorageId, newLabelId, id]
     );
 
-    // Update return_parts.rtv_tab_status
     await client.query(
       `UPDATE return_parts SET rtv_tab_status = 'Stock Replaced', updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`, [row.return_parts_id]
     );
 
-    // Stock movements: OUT RTV → IN Off System
     if (kmResult.rows.length > 0) {
       const km = kmResult.rows[0];
       const currentRtv       = Number(km.stock_rtv) || 0;
@@ -371,7 +337,6 @@ router.post("/:id/replace", async (req, res) => {
       const currentOffSystem = Number(km.stock_off_system) || 0;
       const offSystemAfter   = currentOffSystem + qty;
 
-      // Update kanban_master
       await client.query(
         `UPDATE kanban_master
          SET stock_rtv        = $1,
@@ -381,7 +346,6 @@ router.post("/:id/replace", async (req, res) => {
         [rtvAfter, offSystemAfter, km.id]
       );
 
-      // OUT from RTV
       await client.query(
         `INSERT INTO stock_movements (
            part_id, part_code, part_name, movement_type, stock_level,
@@ -397,7 +361,6 @@ router.post("/:id/replace", async (req, res) => {
         ]
       );
 
-      // IN to Off System
       await client.query(
         `INSERT INTO stock_movements (
            part_id, part_code, part_name, movement_type, stock_level,
@@ -429,10 +392,6 @@ router.post("/:id/replace", async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// POST /api/rtv-parts/:id/complete  →  Stock Replaced → Complete
-// Also updates return_parts.status = 'Complete' dan clears rtv_tab_status
-// ════════════════════════════════════════════════════════════════════════════
 router.post("/:id/complete", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -447,10 +406,7 @@ router.post("/:id/complete", async (req, res) => {
     }
 
     const row = origResult.rows[0];
-
     await client.query("BEGIN");
-
-    // Update rtv_parts → Complete
     await client.query(
       `UPDATE rtv_parts
        SET status = 'Complete',
@@ -461,7 +417,6 @@ router.post("/:id/complete", async (req, res) => {
       [complete_by_name || null, id]
     );
 
-    // Update return_parts.status = 'Complete', clear rtv_tab_status
     await client.query(
       `UPDATE return_parts
        SET status = 'Complete',
