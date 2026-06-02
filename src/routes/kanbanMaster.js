@@ -52,7 +52,7 @@ router.get("/by-part-code", async (req, res) => {
   } catch (err) {
     console.error("Error /api/kanban-master/by-part-code:", err);
     res.status(500).json({ message: "Internal server error" });
-  } 
+  }
 });
 
 router.get("/by-part-name", async (req, res) => {
@@ -417,8 +417,6 @@ router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    console.log(`=== DELETE /api/kanban-master/${id} ===`);
-
     await client.query("BEGIN");
 
     const partQuery = await client.query(
@@ -443,23 +441,16 @@ router.delete("/:id", async (req, res) => {
     }
 
     const part = partQuery.rows[0];
-    console.log("Part to delete:", part);
 
-    const deleteQuery = `
-      DELETE FROM kanban_master 
-      WHERE id = $1 
-      RETURNING *
-    `;
-    const { rows } = await client.query(deleteQuery, [id]);
+    await client.query(`DELETE FROM stock_movements WHERE part_id = $1`, [id]);
+
+    const { rows } = await client.query(
+      `DELETE FROM kanban_master WHERE id = $1 RETURNING *`,
+      [id]
+    );
     const deletedPart = rows[0];
 
-    console.log("Part deleted:", deletedPart.part_code);
-
     await client.query("COMMIT");
-
-    console.log(
-      "Part deleted successfully. Counters updated via database triggers."
-    );
 
     res.json({
       success: true,
@@ -659,27 +650,27 @@ router.get("/qty-per-box", async (req, res) => {
         AND km.is_active = TRUE
       ORDER BY km.id DESC
       LIMIT 1
-    `;  
+    `;
 
     const { rows } = await pool.query(query, [part_code]);
 
     if (!rows.length) {
-      return res.json({ 
-        success: false, 
+      return res.json({
+        success: false,
         message: "Part code not found",
-        item: null 
+        item: null
       });
     }
 
-    return res.json({ 
+    return res.json({
       success: true,
       item: rows[0]
     });
   } catch (err) {
     console.error("Error /api/kanban-master/qty-per-box:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: "Internal server error" 
+      message: "Internal server error"
     });
   }
 });
@@ -716,10 +707,10 @@ router.get("/placement-details", async (req, res) => {
     const { rows } = await pool.query(query, [part_code]);
 
     if (!rows.length) {
-      return res.json({ 
-        success: false, 
+      return res.json({
+        success: false,
         message: "Part code not found",
-        item: null 
+        item: null
       });
     }
 
@@ -732,7 +723,7 @@ router.get("/placement-details", async (req, res) => {
       partWeight = partWeight * 0.0283495;
     }
 
-    return res.json({ 
+    return res.json({
       success: true,
       item: {
         ...rows[0],
@@ -742,9 +733,9 @@ router.get("/placement-details", async (req, res) => {
     });
   } catch (err) {
     console.error("Error /api/kanban-master/placement-details:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: "Internal server error" 
+      message: "Internal server error"
     });
   }
 });

@@ -10,7 +10,6 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
 });
 
-// sanity check
 pool.query('SELECT 1')
   .then(() => console.log('[DB] Connected to PostgreSQL'))
   .catch(err => console.error('[DB] Connection error:', err.message));
