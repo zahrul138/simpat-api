@@ -5,7 +5,7 @@ const pool = require("../db");
 router.get("/", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, type_name FROM vendor_types ORDER BY id ASC`
+      `SELECT id, TRIM(type_name) AS type_name FROM vendor_types ORDER BY id ASC`
     );
     res.json({ success: true, data: rows });
   } catch (error) {
