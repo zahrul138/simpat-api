@@ -26,8 +26,8 @@ const activeSessionsRouter = require("./routes/activeSessions");
 const returnPartsRouter = require("./routes/returnParts");
 const rtvParts = require('./routes/rtvParts');
 const userFeedbacksRouter = require('./routes/userFeedbacks');
-const disposalReport       = require("./routes/disposalReport");
-const activityLogsRouter   = require('./routes/activityLogs');
+const disposalReport = require("./routes/disposalReport");
+const activityLogsRouter = require('./routes/activityLogs');
 const adminDashboardRouter = require('./routes/adminDashboard');
 const formatScheduleDates = require("./middleware/dateFormatter");
 const vendorTypesRouter = require("./routes/vendorTypes");
@@ -42,7 +42,8 @@ app.use(
       const ok =
         !origin ||
         origin === FRONTEND_URL ||
-        /^http:\/\/localhost:\d+$/.test(origin);
+        /^http:\/\/localhost:\d+$/.test(origin) ||
+        /^https:\/\/simpat-[\w-]+-zahrul138s-projects\.vercel\.app$/.test(origin);
       cb(null, ok);
     },
     credentials: true,
@@ -63,9 +64,9 @@ app.use("/users", userRoutes);
 app.use("/departments", deptRoutes);
 app.use("/api/customers", customersRoutes);
 app.use("/api/production-schedules", productionSchedulesRoutes);
-app.use("/api/local-schedules", localSchedulesRoutes);          
-app.use("/api/masters", mastersRoutes);      
-app.use("/api/kanban-master", kanbanMasterRouter);      
+app.use("/api/local-schedules", localSchedulesRoutes);
+app.use("/api/masters", mastersRoutes);
+app.use("/api/kanban-master", kanbanMasterRouter);
 app.use("/api/vendors", vendorsRoutes);
 app.use('/api/warning-settings', warningSettingsRoutes);
 app.use('/api/vendor-placements', vendorPlacement);
@@ -80,12 +81,12 @@ app.use("/api/active-sessions", activeSessionsRouter);
 app.use("/api/return-parts", returnPartsRouter);
 app.use('/api/rtv-parts', rtvParts);
 app.use('/user-feedbacks', userFeedbacksRouter);
-app.use("/api/disposal-report",  disposalReport);
-app.use("/api/activity-logs",    activityLogsRouter);
-app.use("/api/admin-dashboard",  adminDashboardRouter);
+app.use("/api/disposal-report", disposalReport);
+app.use("/api/activity-logs", activityLogsRouter);
+app.use("/api/admin-dashboard", adminDashboardRouter);
 app.use("/api/vendor-types", vendorTypesRouter);
 app.use("/api/production-schedules", formatScheduleDates, productionSchedulesRoutes);
-            
+
 app.use((req, res) => {
   res.status(404).json({
     message: "Route not found",
